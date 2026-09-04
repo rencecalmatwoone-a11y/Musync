@@ -1,0 +1,4 @@
+import { createElement } from 'https://esm.sh/react@19'
+import htm from 'https://esm.sh/htm@3.1.1'
+
+export const html = htm.bind(createElement)
