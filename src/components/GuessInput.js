@@ -36,10 +36,12 @@ export default function GuessInput({ onSubmit, feedback, disabled = false }) {
       try {
         const results = await searchCatalog(value)
         if (alive) setSuggestions(results)
-      } catch {
+      } catch (error) {
         if (alive) {
           setSuggestions([])
-          setSearchError('Music provider temporarily unavailable. Please try again.')
+          setSearchError(error?.quotaExceeded || error?.code === 'SPOTIFY_QUOTA_EXCEEDED' || /quota/i.test(error?.message || '')
+            ? 'Spotify cannot be used at the moment because the development quota has been reached. Please try again later.'
+            : 'Music provider temporarily unavailable. Please try again.')
         }
       } finally {
         if (alive) setSearching(false)
@@ -79,7 +81,11 @@ export default function GuessInput({ onSubmit, feedback, disabled = false }) {
       </div>
       ${(searching || suggestions.length > 0 || searchError) && html`
         <div className="guess-suggestions" role="listbox" aria-label="Song suggestions">
-          ${searching && html`<div className="guess-suggestions__status">SEARCHING CATALOG...</div>`}
+          <div className="guess-suggestions__header">
+            <strong>YOUR GUESS</strong>
+            <span>${searching ? 'SEARCHING CATALOG...' : 'SELECT A MATCH'}</span>
+          </div>
+          ${searching && html`<div className="guess-suggestions__status">Finding songs that match your guess...</div>`}
           ${searchError && html`<div className="guess-suggestions__status">${searchError}</div>`}
           ${suggestions.map((song) => html`
             <button

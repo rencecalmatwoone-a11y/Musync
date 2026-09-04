@@ -72,7 +72,13 @@ function normalizedPopularity(track, candidates) {
     .map((candidate) => popularityValue(candidate))
     .filter((value) => Number.isFinite(value))
 
-  if (!values.length) return 0.5
+  // Spotify may omit popularity from catalog responses. In that case retain
+  // the API's result ordering as a weak discovery prior, without fabricating
+  // a popularity value on the track itself.
+  if (!values.length) {
+    const rank = candidates.indexOf(track)
+    return rank === -1 ? 0.5 : (candidates.length - rank) / candidates.length
+  }
 
   const min = Math.min(...values)
   const max = Math.max(...values)
@@ -136,8 +142,9 @@ export function selectGameTrack(tracks, recentIds = [], options = {}) {
     return String(a.title || '').localeCompare(String(b.title || ''))
   })
 
-  const shortlistSize = Math.max(10, Math.ceil(ranked.length * 0.7))
-  const pool = ranked.slice(0, shortlistSize)
+  // Keep every eligible track in the weighted pool. Popularity should affect
+  // probability, not silently discard the lower-popularity part of Spotify's catalog.
+  const pool = ranked
 
   const weights = pool.map((track) => {
     const popularity = normalizedPopularity(track, pool)

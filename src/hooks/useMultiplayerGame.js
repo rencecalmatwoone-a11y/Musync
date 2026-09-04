@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'https://esm.sh/react@19'
 import { getActivePool, getTrackById, pickRoundTracks, resetSessionTrackHistory, selectGameTrack, setActivePool, secureShuffle } from '../data/tracks.js'
 import useRoundTimer from './useRoundTimer.js'
-import { fetchTracks, eraToYears } from '../spotify/client.js'
+import { fetchTracks, fetchVSAudioTracks, eraToYears, resolveVSAudioPreview } from '../spotify/client.js'
 
 const TOTAL_ROUNDS = 10
 const ROUND_DURATION = 10
@@ -196,13 +196,27 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
         return
       }
       const available = pool.filter((item) => !recentSongsRef.current.includes(item.id))
-      const song = selectGameTrack(available.length ? available : pool, recentSongsRef.current)
+      const candidates = available.length ? available : pool
+      let song = null
+      let preview = null
+      const tried = new Set()
+      while (tried.size < candidates.length) {
+        const candidate = selectGameTrack(candidates.filter((item) => !tried.has(item.id)), recentSongsRef.current)
+        if (!candidate) break
+        tried.add(candidate.id)
+        preview = await resolveVSAudioPreview(candidate)
+        if (preview) {
+          song = { ...candidate, playbackUrl: preview.previewUrl, playbackType: 'preview', previewProvider: preview.provider, previewDuration: preview.duration }
+          break
+        }
+      }
       if (!song) {
-        setFeedback('No playable tracks matched these filters.')
+        setFeedback('No playable preview was available. Please try again.')
         setPhase('lobby')
         return
       }
       recentSongsRef.current = [...recentSongsRef.current, song.id].slice(-15)
+      setActivePool(getActivePool().map((item) => item.id === song.id ? song : item))
       setCurrentSongId(song.id)
       setRound(roundNum)
       setFeedback('')
@@ -241,11 +255,12 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
       if (!song) return
       const correct = optionId === song.id
       const points = correct ? calcPoints(song.difficulty, timer.remaining, ROUND_DURATION) : 0
+      const selectedOption = roundOptions.find((option) => option.id === optionId)
 
       setYouState((prev) => ({
         ...prev,
         selectedAnswerId: optionId,
-        userGuess: `${song.artist} - ${song.title}`,
+        userGuess: selectedOption ? `${selectedOption.title} - ${selectedOption.artist}` : '',
         locked: true,
         correctChoice: song,
         isCorrectAnswer: correct,
@@ -256,7 +271,7 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
       }))
       setFeedback('')
     },
-    [currentSongId, timer.remaining],
+    [currentSongId, roundOptions, timer.remaining],
   )
 
   // Settle the human player when the visible 10s timer reaches 0.
@@ -321,12 +336,12 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
   // Load a fresh Spotify pool (genre / era / difficulty aligned) and make it the
   // active pool for this game so every round and its distractors draw from the
   // same randomized pool.
-  const loadGamePool = useCallback(async ({ genre, era, difficulty } = {}) => {
+  const loadGamePool = useCallback(async ({ genre, era, difficulty, vsAi = false } = {}) => {
     roundFiltersRef.current = { genre, era, difficulty }
     poolErrorRef.current = null
     try {
       const { yearFrom, yearTo } = eraToYears(era)
-      const tracks = await fetchTracks({ genre, yearFrom, yearTo, difficulty, limit: 50, offset: 0 })
+      const tracks = await fetchTracks({ genre, yearFrom, yearTo, difficulty, limit: 120, offset: 0 })
       if (tracks && tracks.length > 0) {
         setActivePool(tracks)
         songBagRef.current = []
@@ -334,10 +349,28 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
         return tracks
       }
     } catch (error) {
+      if (vsAi) {
+        const fallbackTracks = await fetchVSAudioTracks({ genre, limit: 30 })
+        if (fallbackTracks.length) {
+          setActivePool(fallbackTracks)
+          songBagRef.current = []
+          recentSongsRef.current = []
+          return fallbackTracks
+        }
+      }
       poolErrorRef.current = error?.message || 'Spotify is temporarily unavailable, please try again.'
       setFeedback(poolErrorRef.current)
       setActivePool([])
       return []
+    }
+    if (vsAi) {
+      const fallbackTracks = await fetchVSAudioTracks({ genre, limit: 30 })
+      if (fallbackTracks.length) {
+        setActivePool(fallbackTracks)
+        songBagRef.current = []
+        recentSongsRef.current = []
+        return fallbackTracks
+      }
     }
     setActivePool([])
     return []
@@ -346,7 +379,7 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
   const startGame = useCallback(
     async (opts) => {
       resetSessionTrackHistory()
-      const pool = await loadGamePool(opts)
+      const pool = await loadGamePool({ ...(opts || {}), vsAi: Boolean(opts?.ai) })
       if (!pool.length) {
         setFeedback(poolErrorRef.current || 'No playable Spotify tracks matched these filters.')
         setPhase('lobby')
@@ -361,6 +394,20 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
             you: false,
           }
         : null
+      const roster = opts?.ai && practiceBotRef.current
+        ? [practiceBotRef.current]
+        : botsRef.current.filter((bot) => bot.id !== 'ai-opponent')
+      const nextBots = roster.map((b) => ({
+        ...b,
+        score: 0,
+        correct: 0,
+        selectedAnswerId: null,
+        locked: false,
+        correctChoice: null,
+        isCorrectAnswer: null,
+        revealed: false,
+      }))
+      botsRef.current = nextBots
       setRound(0)
       setYouState((s) => ({
         ...s,
@@ -378,19 +425,7 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
         pendingTimeLeft: 0,
         revealed: false,
       }))
-      setBots((prev) => {
-        const source = opts?.ai && practiceBotRef.current ? [practiceBotRef.current] : prev
-        return source.map((b) => ({
-          ...b,
-          score: 0,
-          correct: 0,
-          selectedAnswerId: null,
-          locked: false,
-          correctChoice: null,
-          isCorrectAnswer: null,
-          revealed: false,
-        }))
-      })
+      setBots(nextBots)
       setTicker('')
       startRound(1)
     },

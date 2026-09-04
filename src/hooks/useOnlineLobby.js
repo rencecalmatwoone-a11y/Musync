@@ -211,7 +211,7 @@ export default function useOnlineLobby({ user, profile, poolFilters }) {
       // every client in the match resolves the host's exact song ids.
       const { genre, era, difficulty } = poolFilters || {}
       const { yearFrom, yearTo } = eraToYears(era)
-      const tracks = await fetchTracks({ genre, yearFrom, yearTo, difficulty, limit: 50, offset: 0 })
+      const tracks = await fetchTracks({ genre, yearFrom, yearTo, difficulty, limit: 120, offset: 0 })
       const pool = Array.isArray(tracks) ? tracks : []
       if (pool.length < 10) throw new Error('Spotify returned fewer than 10 tracks for this match.')
       setActivePool(pool)

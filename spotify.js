@@ -22,7 +22,15 @@ const artistGenreCache = new Map()
 const artistGenreRequests = new Map()
 const REQUEST_TIMEOUT_MS = 15000
 let spotifyBackoffUntil = 0
+let spotifyQuotaUntil = 0
 let availabilityCache = null
+let availabilityDiagnostics = {
+  status: null,
+  resultCount: null,
+  responseTimeMs: null,
+  cacheHit: false,
+  checkedAt: null,
+}
 
 function rateLimitError(retryAfterMs = 1500) {
   const seconds = Math.max(1, Math.ceil(retryAfterMs / 1000))
@@ -39,6 +47,7 @@ function quotaExceededError() {
   error.status = 403
   error.code = 'SPOTIFY_QUOTA_EXCEEDED'
   error.quotaExceeded = true
+  error.retryAfterMs = 5 * 60 * 1000
   return error
 }
 
@@ -83,6 +92,9 @@ async function fetchWithTimeout(url, options = {}) {
 
 async function fetchSpotify(url, options = {}) {
   const { purpose = 'request', ...requestOptions } = options
+  if (spotifyQuotaUntil > Date.now()) {
+    throw quotaExceededError()
+  }
   for (let attempt = 0; attempt <= MAX_SPOTIFY_RETRIES; attempt += 1) {
     if (attempt === 0 && spotifyBackoffUntil > Date.now()) {
       const cooldownMs = spotifyBackoffUntil - Date.now()
@@ -99,6 +111,7 @@ async function fetchSpotify(url, options = {}) {
     const reason = await spotifyErrorReason(response)
     if (String(reason).toUpperCase() === 'QUOTA_EXCEEDED') {
       console.warn('[Spotify] Quota exceeded')
+      spotifyQuotaUntil = Date.now() + 5 * 60 * 1000
       throw quotaExceededError()
     }
     if (response.status !== 429) return response
@@ -287,27 +300,88 @@ export function spotifyAuthStatus() {
   }
 }
 
+export async function getSpotifyPlaybackToken() {
+  const token = await getUserToken()
+  if (token) return token
+  const error = new Error('Spotify login is required for playback.')
+  error.status = 401
+  error.code = 'SPOTIFY_LOGIN_REQUIRED'
+  throw error
+}
+
+export async function getSpotifyPlaybackEligibility() {
+  const token = await getUserToken()
+  if (!token) {
+    const error = new Error('Spotify login is required for playback.')
+    error.status = 401
+    error.code = 'SPOTIFY_LOGIN_REQUIRED'
+    throw error
+  }
+  const response = await fetchSpotify(`${API_URL}/me`, {
+    purpose: 'playback-eligibility',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (response.status === 401) {
+    userSession.expiresAt = 0
+    const refreshed = await getUserToken()
+    if (!refreshed) {
+      const error = new Error('Spotify login is required for playback.')
+      error.status = 401
+      error.code = 'SPOTIFY_LOGIN_REQUIRED'
+      throw error
+    }
+    return getSpotifyPlaybackEligibility()
+  }
+  if (!response.ok) throw await spotifyApiError(response, 'Spotify account verification failed')
+  const account = await response.json()
+  return { authenticated: true, premium: account.product === 'premium' }
+}
+
 export async function checkSpotifyAvailability({ clientId, clientSecret }) {
   if (!clientId || !clientSecret) return false
-  if (availabilityCache && availabilityCache.expiresAt > Date.now()) return availabilityCache.available
+  if (availabilityCache && availabilityCache.expiresAt > Date.now()) {
+    availabilityDiagnostics = { ...availabilityDiagnostics, cacheHit: true }
+    return availabilityCache.available
+  }
+  const startedAt = Date.now()
   try {
     const response = await fetchSpotifyApi(`${API_URL}/search?type=track&limit=1&q=a&market=US`, { clientId, clientSecret }, 'availability')
     const available = response.ok
+    const data = await response.clone().json().catch(() => null)
+    availabilityDiagnostics = {
+      status: response.status,
+      resultCount: Array.isArray(data?.tracks?.items) ? data.tracks.items.length : null,
+      responseTimeMs: Date.now() - startedAt,
+      cacheHit: false,
+      checkedAt: new Date().toISOString(),
+    }
     availabilityCache = { available, expiresAt: Date.now() + 30 * 1000 }
     return available
-  } catch {
+  } catch (error) {
+    availabilityDiagnostics = {
+      status: Number(error?.status) || null,
+      resultCount: null,
+      responseTimeMs: Date.now() - startedAt,
+      cacheHit: false,
+      checkedAt: new Date().toISOString(),
+    }
     availabilityCache = { available: false, expiresAt: Date.now() + 30 * 1000 }
     return false
   }
 }
 
-const DIFFICULTY_POPULARITY = [
-  { min: 70, max: 100 },
-  { min: 50, max: 85 },
-  { min: 30, max: 65 },
-  { min: 10, max: 45 },
-  { min: 0, max: 28 },
-]
+export function spotifyDiagnostics() {
+  return {
+    availability: { ...availabilityDiagnostics },
+    cache: {
+      availability: Boolean(availabilityCache),
+      trackSearchEntries: trackSearchCache.size,
+      trackLookupEntries: trackLookupCache.size,
+      artistGenreEntries: artistGenreCache.size,
+      clientCredentialsTokenCached: Boolean(ccTokenCache && ccTokenCache.expiresAt > Date.now()),
+    },
+  }
+}
 
 function decodeYear(year) {
   if (year === '' || year === null || year === undefined) return null
@@ -321,23 +395,28 @@ function normalizeTrack(track, genre, difficulty) {
   const year = track.album?.release_date ? Number(track.album.release_date.slice(0, 4)) : null
   const genreLabel = track.resolvedGenre || 'Unknown'
   return {
-    id: `spotify:${track.id}`,
+    id: track.id,
     provider: 'spotify',
     title: track.name,
     artist,
+    artistId: track.artists?.[0]?.id || null,
     album,
     artwork: track.album?.images?.[0]?.url || null,
+    albumArt: track.album?.images?.[0]?.url || null,
     releaseDate: track.album?.release_date || null,
     genre: genreLabel,
     difficulty: Number(difficulty) || 0,
     popularity: typeof track.popularity === 'number' ? track.popularity : null,
     durationMs: track.duration_ms || 30000,
     externalUrl: track.external_urls?.spotify || null,
+    spotifyUrl: track.external_urls?.spotify || null,
     external_urls: track.external_urls?.spotify ? { spotify: track.external_urls.spotify } : {},
+    isrc: track.external_ids?.isrc || null,
+    spotifyPreviewUrl: track.preview_url || null,
     source: 'spotify',
     providerTrackId: track.id,
-    playbackType: track.preview_url ? 'spotify' : 'unavailable',
-    playbackUrl: track.preview_url || null,
+    playbackType: 'spotify-sdk',
+    playbackUrl: null,
   }
 }
 
@@ -380,7 +459,8 @@ async function resolveArtistGenres(tracks, credentials) {
 async function withPlayablePreview(track) {
   return {
     ...track,
-    playbackType: track.playbackUrl ? 'spotify' : 'unavailable',
+    playbackType: 'spotify-sdk',
+    playbackUrl: null,
   }
 }
 
@@ -399,7 +479,7 @@ export async function searchTracks({
     yearFrom: decodeYear(yearFrom),
     yearTo: decodeYear(yearTo),
     difficulty: Number(difficulty) || 0,
-    limit: Math.min(Math.max(Number(limit) || 10, 1), 10),
+    limit: Math.min(Math.max(Number(limit) || 50, 1), 50),
     offset: Math.min(Math.max(Math.floor(Number(offset) || 0), 0), 990),
     userAuthorized: isUserAuthed(),
   })
@@ -420,7 +500,7 @@ export async function searchTracks({
       : ''
     const genreQuery = genre && genre !== 'Any Genre' ? `genre:${String(genre).trim()}` : ''
     const q = `${genreQuery}${yearQuery}`.trim() || 'a'
-    const pageLimit = Math.min(Math.max(Number(limit) || 10, 1), 10)
+    const pageLimit = Math.min(Math.max(Number(limit) || 50, 1), 50)
     const pageOffset = Math.min(Math.max(Math.floor(Number(offset) || 0), 0), 990)
     const sp = new URLSearchParams({ type: 'track', limit: String(pageLimit), offset: String(pageOffset), market: 'US', q })
     let usedFallback = false
@@ -448,11 +528,8 @@ export async function searchTracks({
       data = await res.json()
       items = (data && data.tracks && data.tracks.items) || []
     }
-    const win = DIFFICULTY_POPULARITY[Number(difficulty)] || DIFFICULTY_POPULARITY[0]
     const candidates = items.filter((track) => {
       if (!track || !track.id) return false
-      const popularity = typeof track.popularity === 'number' ? track.popularity : null
-      if (popularity !== null && (popularity < win.min || popularity > win.max)) return false
       const year = track.album?.release_date ? Number(track.album.release_date.slice(0, 4)) : null
       return !(yFrom !== null && (year === null || year < yFrom)) && !(yTo !== null && (year === null || year > yTo))
     }).map((track) => normalizeTrack(track, genre, difficulty))
@@ -493,7 +570,7 @@ export async function getTracksByIds({ clientId, clientSecret, ids = [], genre =
       .then((tracks) => tracks.map((track) => normalizeTrack(track, genre, difficulty)))
     : []
   const tracks = cleanIds
-    .map((id) => found.find((track) => track.providerTrackId === id || track.id === id || track.id === `spotify:${id}`))
+    .map((id) => found.find((track) => track.providerTrackId === id || track.id === id))
     .filter(Boolean)
   const enriched = await Promise.all(tracks.map(withPlayablePreview))
   trackLookupCache.set(cacheKey, { tracks: enriched, expiresAt: Date.now() + AUDIO_CACHE_TTL_MS })
@@ -527,5 +604,7 @@ export async function searchCatalog({ clientId, clientSecret, query, limit = 8 }
   const resolved = await resolveArtistGenres(items, { clientId, clientSecret })
   return resolved.map((track) => normalizeTrack(track, null, 0))
 }
+
+// Degraded-mode catalog for Spotify outages or development quota exhaustion.
 
 

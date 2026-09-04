@@ -31,22 +31,38 @@ export default function usePreviewAudio() {
       node.volume = 1
       node.loop = false
       node.preload = 'auto'
+      let loadTimeout = null
 
       const handleCanPlay = () => {
+        if (loadTimeout) clearTimeout(loadTimeout)
         setStatus((s) => (s === 'loading' ? 'ready' : s))
         setError(null)
       }
+      const handleLoadedData = handleCanPlay
+      const handlePlay = () => setStatus('playing')
       const handleError = () => {
+        if (loadTimeout) clearTimeout(loadTimeout)
         setStatus('error')
         setError('Audio preview could not be played.')
         console.warn('[Audio] playback failed', { error: node.error?.message || 'media error' })
       }
       const handleEnded = () => setStatus('ended')
       node.addEventListener('canplay', handleCanPlay)
+      node.addEventListener('loadeddata', handleLoadedData)
+      node.addEventListener('play', handlePlay)
       node.addEventListener('error', handleError)
       node.addEventListener('ended', handleEnded)
+      loadTimeout = setTimeout(() => {
+        if (node.readyState < 2) {
+          setStatus('error')
+          setError('Audio preview timed out.')
+        }
+      }, 8000)
       node._musyncCleanup = () => {
+        if (loadTimeout) clearTimeout(loadTimeout)
         node.removeEventListener('canplay', handleCanPlay)
+        node.removeEventListener('loadeddata', handleLoadedData)
+        node.removeEventListener('play', handlePlay)
         node.removeEventListener('error', handleError)
         node.removeEventListener('ended', handleEnded)
       }

@@ -49,6 +49,7 @@ export default function App() {
   const [classicDifficulty, setClassicDifficulty] = useState(() => loadStat('musync-classic-difficulty', loadStat('musync-difficulty', 1)))
   const [multiplayerDifficulty, setMultiplayerDifficulty] = useState(() => loadStat('musync-multiplayer-difficulty', loadStat('musync-difficulty', 1)))
   const [multiplayerPractice, setMultiplayerPractice] = useState(false)
+  const [practiceLaunchRequested, setPracticeLaunchRequested] = useState(false)
   const [round, setRound] = useState(() => loadStat('musync-round', 4))
   const [score, setScore] = useState(() => loadStat('musync-score', 1250))
   const [streak, setStreak] = useState(() => loadStat('musync-streak', 5))
@@ -61,6 +62,7 @@ export default function App() {
     loadStat('musync-stats-collapsed', false),
   )
   const [feedback, setFeedback] = useState('')
+  const [classicUserGuess, setClassicUserGuess] = useState('')
   const [classicReveal, setClassicReveal] = useState(false)
   const [classicAnswerLocked, setClassicAnswerLocked] = useState(false)
   const [classicResultCorrect, setClassicResultCorrect] = useState(false)
@@ -168,14 +170,14 @@ export default function App() {
     classicPlaybackPositionRef.current = 0
   }
 
-  const game = useMultiplayerGame(displayName)
-  const lobby = useFriendLobby(displayName)
-
   // Supabase online layer — available whenever it's configured. Sign-in is
   // prompted by the dashboard when opening the online lobby, so the PLAY ONLINE
   // option is always reachable (no deadlock on an already-authenticated user).
   const auth = useSupabaseAuth()
   const onlineActive = isSupabaseConfigured
+  const multiplayerDisplayName = auth.user ? displayName : 'Anon'
+  const game = useMultiplayerGame(multiplayerDisplayName)
+  const lobby = useFriendLobby(multiplayerDisplayName)
   const effectiveProfile = auth.profile ? { ...auth.profile, display_name: displayName } : { display_name: displayName }
   const onlineLobby = useOnlineLobby({ user: auth.user, profile: effectiveProfile, poolFilters: { genre, era, difficulty: multiplayerDifficulty } })
   const onlineGame = useOnlineGame({
@@ -219,6 +221,7 @@ export default function App() {
       : raw.trim().toLowerCase()
     const selectedTrack = typeof raw === 'object' ? raw : null
     if (!selectedTrack && !guess) return
+    setClassicUserGuess(selectedTrack ? `${selectedTrack.title} - ${selectedTrack.artist}` : raw.trim())
     const aliases = active.aliases || buildAliases(active)
     const normalize = (value) => String(value || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim()
     const normalizedGuess = normalize(guess)
@@ -252,6 +255,7 @@ export default function App() {
     setClassicRevealStartAt(0)
     classicPlaybackPositionRef.current = 0
     setFeedback('')
+    setClassicUserGuess('')
   }
 
   function handleModeChange(newMode) {
@@ -268,7 +272,7 @@ export default function App() {
         onNavigate=${setPage}
       />
 
-      <main key=${mode} className=${multiplayer ? 'center-column center-column--mp' : 'center-column'}>
+      <main key=${mode} className=${multiplayer ? 'center-column center-column--mp' : `center-column${page === 'game' ? ' center-column--game' : ''}`}>
         ${multiplayer
           ? html`<${MultiplayerDashboard}
               mode=${mode}
@@ -283,6 +287,9 @@ export default function App() {
               difficulty=${multiplayerDifficulty}
               onDifficultyChange=${setMultiplayerDifficulty}
               onPracticeStateChange=${setMultiplayerPractice}
+              startInPractice=${practiceLaunchRequested}
+              onDisplayNameChange=${setDisplayName}
+              displayName=${displayName}
             />`
           : html`
               <${Header}
@@ -322,6 +329,7 @@ export default function App() {
                   }}
                   answerLocked=${classicReveal || classicAnswerLocked}
                   revealActive=${classicReveal}
+                  onPractice=${() => { setPracticeLaunchRequested(true); setMode('multiplayer') }}
                   onSubmit=${submitGuess}
                   feedback=${feedback}
                 />
@@ -329,6 +337,7 @@ export default function App() {
                   <${SongReveal}
                     song=${classicTrack}
                     isCorrectAnswer=${classicResultCorrect}
+                    userGuess=${classicUserGuess}
                     round=${round}
                     totalRounds=${10}
                     playbackUrl=${classicAudio.playbackUrl}

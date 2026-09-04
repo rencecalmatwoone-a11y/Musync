@@ -11,6 +11,7 @@ const trackCache = new Map()
 const trackErrorCache = new Map()
 const trackRequests = new Map()
 const catalogCache = new Map()
+const catalogErrorCache = new Map()
 const catalogRequests = new Map()
 
 // ---------------------------------------------------------------------------
@@ -99,7 +100,7 @@ export async function fetchTracks({
   offset,
   source = 'unknown',
 } = {}) {
-  const requestedLimit = Math.min(Math.max(Number(limit) || 10, 1), 50)
+  const requestedLimit = Math.min(Math.max(Number(limit) || 10, 1), 120)
   const effectiveOffset = Number.isFinite(offset) ? offset : 0
   const requestedOffset = Math.max(Math.floor(effectiveOffset / 10) * 10, 0)
   const cacheKey = trackCacheKey({ genre, yearFrom, yearTo, difficulty, limit: requestedLimit, offset: requestedOffset })
@@ -133,6 +134,8 @@ export async function fetchTracks({
    try {
     const tracks = []
     const seen = new Set()
+    // Spotify currently rejects larger search pages for this app/API response;
+    // keep each upstream request at the accepted limit and aggregate locally.
     const pageSize = 10
     const maxPages = Math.ceil(requestedLimit / pageSize)
     for (let page = 0; page < maxPages; page += 1) {
@@ -205,6 +208,36 @@ export async function fetchRandomTrack({ genre, yearFrom, yearTo, difficulty, re
   return selectGameTrack(tracks, recentIds)
 }
 
+export async function resolveVSAudioPreview(track) {
+  if (!track?.id || !track.title || !track.artist) return null
+  const params = new URLSearchParams({
+    trackId: track.id,
+    title: track.title,
+    artist: track.artist,
+    durationMs: String(track.durationMs || 30000),
+  })
+  if (track.isrc) params.set('isrc', track.isrc)
+  if (track.spotifyPreviewUrl) params.set('spotifyPreviewUrl', track.spotifyPreviewUrl)
+  try {
+    const response = await fetch(`/api/vs-audio-preview?${params}`)
+    const data = await response.json().catch(() => ({}))
+    return response.ok && data.preview ? data.preview : null
+  } catch {
+    return null
+  }
+}
+
+export async function fetchVSAudioTracks({ genre = 'Any Genre', limit = 30 } = {}) {
+  try {
+    const params = new URLSearchParams({ genre, limit: String(limit) })
+    const response = await fetch(`/api/vs-audio-tracks?${params}`)
+    const data = await response.json().catch(() => ({}))
+    return response.ok && Array.isArray(data.tracks) ? data.tracks : []
+  } catch {
+    return []
+  }
+}
+
 export async function searchCatalog(query, limit = 8, source = 'unknown') {
   if (!String(query || '').trim()) return []
   const cleanQuery = String(query).trim()
@@ -219,6 +252,12 @@ export async function searchCatalog(query, limit = 8, source = 'unknown') {
     trackLog('searchCatalog', source, 'in-flight-dedup', { query: cleanQuery })
     return catalogRequests.get(cacheKey)
   }
+  const cachedError = catalogErrorCache.get(cacheKey)
+  if (cachedError && cachedError.expiresAt > Date.now()) {
+    trackLog('searchCatalog', source, 'error-cache-hit', { code: cachedError.error?.code || cachedError.error?.status })
+    throw cachedError.error
+  }
+  if (cachedError) catalogErrorCache.delete(cacheKey)
   trackLog('searchCatalog', source, 'request-start', { query: cleanQuery })
   const request = (async () => {
     const params = new URLSearchParams({ q: cleanQuery, limit: String(requestedLimit) })
@@ -234,6 +273,7 @@ export async function searchCatalog(query, limit = 8, source = 'unknown') {
       trackLog('searchCatalog', source, 'request-complete', { query: cleanQuery, found: tracks.length })
       return tracks
     } catch (error) {
+      catalogErrorCache.set(cacheKey, { error, expiresAt: Date.now() + TRACK_ERROR_TTL_MS })
       trackLog('searchCatalog', source, 'request-error', { query: cleanQuery, code: error?.code || error?.status || error?.message })
       throw error
     } finally {

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'https://esm.sh/react@19'
 import { html } from '../html.js'
 import { isSupabaseConfigured } from '../supabase/client.js'
 
-export default function AuthPanel({ auth, onClose }) {
+export default function AuthPanel({ auth, displayName, onClose, onDisplayNameChange }) {
   const [tab, setTab] = useState('email')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -34,7 +34,9 @@ export default function AuthPanel({ auth, onClose }) {
   }
 
   if (auth.status === 'authenticated' && auth.user) {
-    const display = auth.profile?.display_name || auth.user.email || 'Guest'
+    const display = auth.user.is_anonymous
+      ? (displayName || 'Anon')
+      : (auth.profile?.display_name || auth.user.email || 'Guest')
     return html`
       <div className="auth-modal">
         <div className="auth-modal__card">
@@ -67,26 +69,39 @@ export default function AuthPanel({ auth, onClose }) {
             className=${`auth-tab${tab === 'email' ? ' is-active' : ''}`}
             onClick=${() => setTab('email')}
           >
-            EMAIL
+            EMAIL SIGN IN
           </button>
           <button
             type="button"
             className=${`auth-tab${tab === 'anonymous' ? ' is-active' : ''}`}
             onClick=${() => setTab('anonymous')}
           >
-            QUICK PLAY
+            GUEST SIGN IN
           </button>
         </div>
 
         ${tab === 'anonymous'
           ? html`
+              <label className="auth-field">
+                DISPLAY NAME
+                <input
+                  type="text"
+                  value=${name}
+                  onInput=${(e) => setName(e.target.value)}
+                  placeholder="Elite Listener"
+                  maxLength="32"
+                />
+              </label>
               <button
                 type="button"
                 className="auth-btn"
-                onClick=${auth.signInAnonymously}
+                onClick=${async () => {
+                  if (onDisplayNameChange) onDisplayNameChange(name.trim() || 'Anon')
+                  await auth.signInAnonymously()
+                }}
                 disabled=${auth.status === 'loading'}
               >
-                PLAY AS GUEST ▶
+                SIGN IN AS GUEST ▶
               </button>
             `
           : html`

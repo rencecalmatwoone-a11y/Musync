@@ -13,8 +13,12 @@ import {
   exchangeCode,
   clearUserSession,
   spotifyAuthStatus,
+  getSpotifyPlaybackToken,
+  getSpotifyPlaybackEligibility,
   checkSpotifyAvailability,
+  spotifyDiagnostics,
 } from './spotify.js'
+import { resolveVSAudio, searchVSAudioTracks, vsAudioDiagnostics } from './vsAudio.js'
 
 const root = fileURLToPath(new URL('.', import.meta.url))
 
@@ -84,7 +88,7 @@ const SPOTIFY_REDIRECT_URI =
   (process.env.NODE_ENV === 'production' && SPOTIFY_PRODUCTION_REDIRECT_URI
     ? SPOTIFY_PRODUCTION_REDIRECT_URI
     : SPOTIFY_LOCAL_REDIRECT_URI)
-const SPOTIFY_SCOPE = 'user-read-private user-read-email'
+const SPOTIFY_SCOPE = 'user-read-private user-read-email streaming user-read-playback-state user-modify-playback-state'
 
 // Single in-memory CSRF state for the OAuth dance (single local user).
 const oauthStates = new Map()
@@ -95,19 +99,16 @@ function sendJson(res, status, payload) {
 }
 
 function attachSpotifyPlayback(track) {
-  const playbackUrl = track.playbackUrl
-    ? `/api/audio-preview?url=${encodeURIComponent(track.playbackUrl)}`
-    : null
   return {
     ...track,
-    playbackUrl,
-    playbackType: playbackUrl ? 'preview' : 'unavailable',
+    playbackUrl: null,
+    playbackType: 'spotify-sdk',
     playback: {
-      available: Boolean(playbackUrl),
-      provider: playbackUrl ? 'spotify' : null,
-      previewUrl: playbackUrl,
+      available: true,
+      provider: 'spotify',
+      previewUrl: null,
       mimeType: null,
-      durationMs: playbackUrl ? 30000 : 0,
+      durationMs: track.durationMs || 0,
     },
   }
 }
@@ -117,7 +118,9 @@ function spotifyErrorPayload(error, fallbackCode) {
   const quotaExceeded = Boolean(error?.quotaExceeded || error?.code === 'SPOTIFY_QUOTA_EXCEEDED')
   return {
     success: false,
-    error: error?.message || 'Spotify request failed.',
+    error: quotaExceeded
+      ? 'Spotify is temporarily unavailable because the development quota has been reached. Please try again later.'
+      : error?.message || 'Spotify request failed.',
     code: error?.code || fallbackCode,
     status,
     spotifyStatus: status,
@@ -210,10 +213,105 @@ const server = createServer(async (req, res) => {
     return
   }
 
+  if (relative === '/api/spotify/playback-token') {
+    try {
+      const accessToken = await getSpotifyPlaybackToken()
+      sendJson(res, 200, { accessToken })
+    } catch (error) {
+      sendJson(res, Number(error?.status) === 401 ? 401 : 502, {
+        error: error?.message || 'Spotify playback authentication failed.',
+        code: error?.code || 'SPOTIFY_PLAYBACK_AUTH_ERROR',
+      })
+    }
+    return
+  }
+
+  if (relative === '/api/spotify/eligibility') {
+    try {
+      sendJson(res, 200, await getSpotifyPlaybackEligibility())
+    } catch (error) {
+      sendJson(res, Number(error?.status) === 401 ? 401 : 502, {
+        authenticated: false,
+        premium: false,
+        error: error?.message || 'Spotify account verification failed.',
+        code: error?.code || 'SPOTIFY_ELIGIBILITY_ERROR',
+      })
+    }
+    return
+  }
+
   if (relative === '/api/providers/status') {
     const spotifyAvailable = await checkSpotifyAvailability({ clientId: SPOTIFY_CLIENT_ID, clientSecret: SPOTIFY_CLIENT_SECRET })
     sendJson(res, 200, {
       spotify: { configured: spotifyConfigured, available: spotifyAvailable },
+      vsAudio: vsAudioDiagnostics(),
+    })
+    return
+  }
+
+  if (relative === '/api/vs-audio-preview') {
+    const track = {
+      trackId: url.searchParams.get('trackId') || '',
+      isrc: url.searchParams.get('isrc') || '',
+      title: url.searchParams.get('title') || '',
+      artist: url.searchParams.get('artist') || '',
+      spotifyPreviewUrl: url.searchParams.get('spotifyPreviewUrl') || '',
+      durationMs: Number(url.searchParams.get('durationMs')) || 30000,
+    }
+    if (!track.title || !track.artist || !track.trackId) {
+      sendJson(res, 400, { success: false, error: 'TRACK_METADATA_REQUIRED' })
+      return
+    }
+    try {
+      const preview = await resolveVSAudio(track)
+      const playablePreview = preview
+        ? {
+            ...preview,
+            previewUrl: `/api/audio-preview?url=${encodeURIComponent(preview.previewUrl)}`,
+          }
+        : null
+      sendJson(res, 200, { success: true, preview: playablePreview })
+    } catch {
+      sendJson(res, 200, { success: true, preview: null })
+    }
+    return
+  }
+
+  if (relative === '/api/vs-audio-tracks') {
+    try {
+      const tracks = await searchVSAudioTracks(url.searchParams.get('genre') || 'Any Genre', url.searchParams.get('limit') || 30)
+      sendJson(res, 200, { success: true, provider: 'deezer', tracks })
+    } catch (error) {
+      sendJson(res, 502, { success: false, error: error?.message || 'VS AI catalog lookup failed.' })
+    }
+    return
+  }
+
+  // Diagnostic endpoint for forensic audit - safe debugging without exposing secrets.
+  if (relative === '/api/diagnostics/spotify') {
+    const tokenLastChar = SPOTIFY_CLIENT_ID && SPOTIFY_CLIENT_ID.length > 4 ? SPOTIFY_CLIENT_ID.slice(-4) : 'NONE'
+    const shortId = SPOTIFY_CLIENT_ID && SPOTIFY_CLIENT_ID.length > 0 ? `[${SPOTIFY_CLIENT_ID.slice(0, 4)}...${tokenLastChar}]` : 'UNCONFIGURED'
+    const spotifyAvailable = await checkSpotifyAvailability({ clientId: SPOTIFY_CLIENT_ID, clientSecret: SPOTIFY_CLIENT_SECRET })
+    sendJson(res, 200, {
+      timestamp: new Date().toISOString(),
+      spotify: {
+        configured: spotifyConfigured,
+        clientIdFingerprint: shortId,
+        available: spotifyAvailable,
+        environment: {
+          hasProcessEnvId: Boolean(process.env.SPOTIFY_CLIENT_ID),
+          hasProcessEnvSecret: Boolean(process.env.SPOTIFY_CLIENT_SECRET),
+          hasEnvFileId: Boolean(env.SPOTIFY_CLIENT_ID),
+          hasEnvFileSecret: Boolean(env.SPOTIFY_CLIENT_SECRET),
+        },
+        auth: {
+          userAuthenticated: spotifyAuthStatus().authed,
+        },
+      },
+      caches: {
+        ...spotifyDiagnostics(),
+        note: 'All server caches are in memory and are cleared on restart.',
+      },
     })
     return
   }
@@ -226,7 +324,8 @@ const server = createServer(async (req, res) => {
     try {
       const sourceUrl = new URL(source)
       const allowedAudioHosts = new Set(['p.scdn.co'])
-      if (sourceUrl.protocol !== 'https:' || !allowedAudioHosts.has(sourceUrl.hostname)) {
+      const isDeezerPreview = sourceUrl.protocol === 'https:' && sourceUrl.hostname.endsWith('.dzcdn.net')
+      if (sourceUrl.protocol !== 'https:' || (!allowedAudioHosts.has(sourceUrl.hostname) && !isDeezerPreview)) {
         sendJson(res, 400, { error: 'INVALID_AUDIO_SOURCE' })
         return
       }
@@ -276,8 +375,8 @@ const server = createServer(async (req, res) => {
     const requestedLimit = Number(url.searchParams.get('limit') || 120)
     const requestedOffset = Number(url.searchParams.get('offset') || 0)
     const limit = Number.isFinite(requestedLimit)
-      ? Math.min(Math.max(requestedLimit, 1), 50)
-      : 120
+      ? Math.min(Math.max(requestedLimit, 1), 10)
+      : 10
     const offset = Number.isFinite(requestedOffset)
       ? Math.min(Math.max(Math.floor(requestedOffset / 10) * 10, 0), 990)
       : 0
@@ -396,7 +495,11 @@ const server = createServer(async (req, res) => {
 
   try {
     const body = await readFile(filePath)
-    res.writeHead(200, { 'Content-Type': types[extname(filePath)] || 'application/octet-stream' })
+    const contentType = types[extname(filePath)] || 'application/octet-stream'
+    res.writeHead(200, {
+      'Content-Type': contentType,
+      ...(extname(filePath) === '.js' ? { 'Cache-Control': 'no-store' } : {}),
+    })
     res.end(body)
   } catch {
     res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })

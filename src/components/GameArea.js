@@ -122,6 +122,7 @@ export default function GameArea({
   onPlaybackPositionChange,
   revealActive = false,
   answerLocked = false,
+  onPractice = null,
 }) {
   return html`
     <section className="game-area">
@@ -144,6 +145,7 @@ export default function GameArea({
         onExpire=${onExpire}
         onPlaybackPositionChange=${onPlaybackPositionChange}
         revealActive=${revealActive}
+        onPractice=${onPractice}
       />
       <${GuessInput} onSubmit=${onSubmit} feedback=${feedback} disabled=${answerLocked} />
     </section>

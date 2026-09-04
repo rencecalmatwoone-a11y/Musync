@@ -3,11 +3,8 @@ import Difficulty from './Difficulty.js'
 
 function FlameIcon() {
   return html`
-    <svg className="flame" viewBox="0 0 12 14" aria-hidden="true">
-      <path
-        d="M6 1c.4 2.2-1.4 3.1-1.2 5.1C6.2 5.4 8 4.2 9.1 6.2 10.4 8.4 8.7 12.4 6 13c-3.2-.7-4.4-4.6-2.6-7.1C4.6 4.2 5.4 3.2 6 1z"
-        fill="currentColor"
-      />
+    <svg className="flame" viewBox="0 0 12 14" fill="currentColor" aria-hidden="true">
+      <path d="M6 1C6 1 9 5 9 8C9 10.2 7.5 11.5 6 11.5C4.5 11.5 3 10.2 3 8C3 5 6 1 6 1ZM6 12.5C7.5 12.5 8.5 13.2 8.5 14H3.5C3.5 13.2 4.5 12.5 6 12.5Z" />
     </svg>
   `
 }

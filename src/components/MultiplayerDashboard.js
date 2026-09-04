@@ -10,7 +10,18 @@ import SongReveal from './SongReveal.js'
 import FriendLobby from './FriendLobby.js'
 import AuthPanel from './AuthPanel.js'
 import Difficulty from './Difficulty.js'
-import useTrackAudio from '../hooks/useTrackAudio.js'
+import SpotifyPlaybackModal from './SpotifyPlaybackModal.js'
+import useTrackAudio, { useSpotifyPlayback } from '../hooks/useTrackAudio.js'
+
+function MusyncLogoIcon() {
+  return html`
+    <svg className="mp-logo-badge" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+      <rect width="32" height="32" rx="6" fill="#0d0d0d" />
+      <circle cx="16" cy="16" r="8" fill="#f4c524" />
+      <polygon points="14,11 14,21 22,16" fill="#0d0d0d" />
+    </svg>
+  `
+}
 
 export default function MultiplayerDashboard({
   mode,
@@ -27,6 +38,9 @@ export default function MultiplayerDashboard({
   difficulty,
   onDifficultyChange,
   onPracticeStateChange,
+  onDisplayNameChange,
+  displayName,
+  startInPractice = false,
 }) {
   const [showSettings, setShowSettings] = useState(false)
   const [showAuth, setShowAuth] = useState(false)
@@ -37,6 +51,8 @@ export default function MultiplayerDashboard({
   // Practice setup state.
   const [aiDifficulty, setAiDifficulty] = useState(0) // 0 Easy, 1 Medium, 2 Hard
   const [practiceStarting, setPracticeStarting] = useState(false)
+  const [spotifyGateState, setSpotifyGateState] = useState(null)
+  const spotify = useSpotifyPlayback(false)
   // Which lobby backend to use: 'online' (Supabase) or 'local' (simulation).
   // Defaults to online only when already configured (it is, since the PLAY
   // ONLINE button only shows under onlineActive).
@@ -46,6 +62,14 @@ export default function MultiplayerDashboard({
   // True when the current local battle was launched as Practice vs AI, so that
   // "PLAY AGAIN" restarts the same AI battle rather than a friend match.
   const isPracticeRef = useRef(false)
+
+  useEffect(() => {
+    if (startInPractice) {
+      isPracticeRef.current = true
+      if (onPracticeStateChange) onPracticeStateChange(true)
+      setScreen('practice')
+    }
+  }, [startInPractice])
 
   // If the player tapped PLAY ONLINE and then completed sign-in, drop them
   // straight into the online lobby instead of requiring a second click.
@@ -74,6 +98,7 @@ export default function MultiplayerDashboard({
     you,
     roundOptions,
     selectedAnswer,
+    userGuess,
     isCorrectAnswer,
     feedback,
     ticker,
@@ -98,6 +123,12 @@ export default function MultiplayerDashboard({
 
   const gap = you && players[1] ? you.score - players[1].score : 0
 
+  useEffect(() => {
+    const localLobby = phase === 'lobby'
+    const onlineLobby = online?.phase === 'idle' || online?.phase === 'lobby'
+    if (localLobby || onlineLobby) setShowLeave(false)
+  }, [phase, online?.phase])
+
   // Keep the approved anonymous audio URL attached to the current song.
   const localAudio = useTrackAudio(
     game.currentSongId,
@@ -112,16 +143,41 @@ export default function MultiplayerDashboard({
 
   // When a friend joins the local lobby, add them as an independent player.
   useEffect(() => {
-    if (transport === 'local' && lobby && lobby.guest) {
+    if (transport === 'local' && screen === 'friends' && phase === 'lobby' && lobby?.guest) {
       addFriend(lobby.guest)
     }
-  }, [transport, lobby, addFriend])
+  }, [transport, screen, phase, lobby, addFriend])
+
+  const mapSpotifyError = (error) => error.code === 'SPOTIFY_PREMIUM_REQUIRED'
+    ? 'premium-required'
+    : error.code === 'SPOTIFY_LOGIN_REQUIRED'
+      ? 'login-required'
+      : error.code === 'SPOTIFY_QUOTA_EXCEEDED' || /quota/i.test(error.message || '')
+        ? 'quota-exceeded'
+        : 'error'
+
+  const launchMatch = async (startMatch) => {
+    setSpotifyGateState('connecting')
+    try {
+      await spotify.ensureReady()
+      setSpotifyGateState(null)
+      await startMatch()
+    } catch (error) {
+      setSpotifyGateState(mapSpotifyError(error))
+    }
+  }
+
+  const goToPractice = () => {
+    setSpotifyGateState(null)
+    isPracticeRef.current = true
+    if (onPracticeStateChange) onPracticeStateChange(true)
+    setScreen('practice')
+  }
 
   const handleStart = () => {
     isPracticeRef.current = false
     if (onPracticeStateChange) onPracticeStateChange(false)
-    if (onStartMatch) onStartMatch()
-    else startGame()
+    launchMatch(() => (onStartMatch ? onStartMatch() : startGame()))
   }
 
   // AI skill -> probability the opponent guesses correctly.
@@ -150,6 +206,7 @@ export default function MultiplayerDashboard({
     setPracticeStarting(true)
     try {
       isPracticeRef.current = true
+      setSpotifyGateState(null)
       if (onPracticeStateChange) onPracticeStateChange(true)
       // Practice is always local — switch transport so the online early-return
       // does not block the local game render.
@@ -204,9 +261,14 @@ export default function MultiplayerDashboard({
         <div className="mp-dashboard">
           <div className="mp-top">
             <div className="mp-top__row">
+              <${MusyncLogoIcon} />
               <${ModeToggle} value=${mode} onChange=${onModeChange} />
               <button type="button" className="auth-chip" onClick=${() => setShowAuth(true)}>
-                ${auth.user?.email || auth.profile?.display_name || 'Player'}
+                ${auth.status !== 'authenticated' || !auth.user
+                  ? 'SIGN IN'
+                  : auth.user.is_anonymous
+                    ? (displayName || 'Anon')
+                    : (auth.user.email || auth.profile?.display_name || displayName || 'Player')}
               </button>
             </div>
           </div>
@@ -228,10 +290,18 @@ export default function MultiplayerDashboard({
               }}
               joinCode=${joinCode}
               onJoin=${(c) => online.joinRoom(c)}
-              onStart=${online.startMatch}
+              onStart=${() => launchMatch(online.startMatch)}
               onBack=${() => { if (onPracticeStateChange) onPracticeStateChange(false); setScreen('menu') }}
             />
           `}
+
+          <${SpotifyPlaybackModal}
+            state=${screen === 'friends' ? spotifyGateState : null}
+            onRetry=${() => launchMatch(online.startMatch)}
+            onBack=${() => setSpotifyGateState(null)}
+            onLogin=${() => { try { localStorage.setItem('musync-spotify-play-intent', '1') } catch { /* noop */ } }}
+            onPractice=${goToPractice}
+          />
 
           ${screen === 'practice' && html`
             <${PracticeSetup}
@@ -245,7 +315,7 @@ export default function MultiplayerDashboard({
             />
           `}
 
-          ${showAuth && html`<${AuthPanel} auth=${auth} onClose=${() => setShowAuth(false)} />`}
+          ${showAuth && html`<${AuthPanel} auth=${auth} displayName=${displayName} onClose=${() => setShowAuth(false)} onDisplayNameChange=${onDisplayNameChange} />`}
           ${online.error && html`<p className="mp-err">${online.error}</p>`}
         </div>
       `
@@ -286,6 +356,7 @@ export default function MultiplayerDashboard({
             <${SongReveal}
               song=${og.song}
               isCorrectAnswer=${og.isCorrect}
+              userGuess=${og.userGuess}
               round=${og.currentRound}
               totalRounds=${og.totalRounds}
               playbackUrl=${onlineAudio.playbackUrl}
@@ -343,6 +414,7 @@ export default function MultiplayerDashboard({
         <div className="mp-dashboard">
           <div className="mp-top">
             <div className="mp-top__row">
+              <${MusyncLogoIcon} />
               <${ModeToggle} value=${mode} onChange=${onModeChange} disabled />
               <span className="mp-online-badge">● ONLINE</span>
               <button
@@ -425,18 +497,19 @@ export default function MultiplayerDashboard({
         <div className="mp-top">
           <div className="mp-top__row">
             <${ModeToggle} value=${mode} onChange=${onModeChange} />
+            ${auth.user?.is_anonymous && html`<span className="mp-player-name">${displayName || 'Anon'}</span>`}
             ${onlineActive && html`
               <button
                 type="button"
                 className="auth-chip"
                 onClick=${handlePlayOnline}
               >
-                🛰 ${auth.status === 'authenticated' ? 'PLAY ONLINE' : 'PLAY ONLINE · SIGN IN'}
+                ${auth.status === 'authenticated' ? 'PLAY ONLINE' : 'PLAY ONLINE · SIGN IN'}
               </button>
             `}
           </div>
         </div>
-        ${showAuth && html`<${AuthPanel} auth=${auth} onClose=${() => setShowAuth(false)} />`}
+          ${showAuth && html`<${AuthPanel} auth=${auth} displayName=${displayName} onClose=${() => setShowAuth(false)} onDisplayNameChange=${onDisplayNameChange} />`}
 
         ${screen === 'menu' && html`
           <${MultiplayerMenu}
@@ -446,8 +519,20 @@ export default function MultiplayerDashboard({
         `}
 
         ${screen === 'friends' && html`
-          <${FriendLobby} lobby=${lobby} onStart=${handleStart} onBack=${() => setScreen('menu')} />
+          <${FriendLobby}
+            lobby=${lobby}
+            onStart=${handleStart}
+            onBack=${() => setScreen('menu')}
+          />
         `}
+
+        <${SpotifyPlaybackModal}
+          state=${screen === 'friends' ? spotifyGateState : null}
+          onRetry=${handleStart}
+          onBack=${() => setSpotifyGateState(null)}
+          onLogin=${() => { try { localStorage.setItem('musync-spotify-play-intent', '1') } catch { /* noop */ } }}
+          onPractice=${goToPractice}
+        />
 
         ${screen === 'practice' && html`
           <${PracticeSetup}
@@ -524,6 +609,7 @@ export default function MultiplayerDashboard({
         <${SongReveal}
           song=${correctSong}
           isCorrectAnswer=${isCorrectAnswer}
+            userGuess=${userGuess}
           round=${round}
           totalRounds=${totalRounds}
           playbackUrl=${localAudio.playbackUrl}
