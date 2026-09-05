@@ -1,12 +1,18 @@
-import { useState } from 'https://esm.sh/react@19'
+import { useEffect, useState } from 'https://esm.sh/react@19'
 import { html } from '../html.js'
+import { setAudioVolume } from '../hooks/useAudioSettings.js'
 
 export default function SettingsPanel({ settings, onUpdate, onClose }) {
   const [local, setLocal] = useState({ ...settings })
 
+  useEffect(() => {
+    setLocal({ ...settings })
+  }, [settings])
+
   function handleChange(key, value) {
     const next = { ...local, [key]: value }
     setLocal(next)
+    if (key === 'volume') setAudioVolume(value)
     onUpdate(next)
   }
 

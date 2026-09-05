@@ -1,6 +1,6 @@
-// Frontend Spotify client for metadata and discovery only.
 import { isSpotifyConfigured, isSpotifyAuthed } from './config.js'
 import { selectGameTrack } from '../data/tracks.js'
+import { getPopularFallbackTracks } from '../data/popularTracks.js'
 
 export { isSpotifyConfigured, isSpotifyAuthed }
 
@@ -13,16 +13,41 @@ const trackRequests = new Map()
 const catalogCache = new Map()
 const catalogErrorCache = new Map()
 const catalogRequests = new Map()
+const TAB_SESSION_KEY = 'musync-spotify-tab-session'
 
-// ---------------------------------------------------------------------------
-// TEMPORARY request instrumentation (remove after diagnosing the 429 spike).
-// Reports the caller/source, cache hit vs miss, and timestamp for every
-// Spotify-backed call so we can see exactly what triggers each request.
-// Never logs tokens, secrets, or user data.
-// ---------------------------------------------------------------------------
+function getTabSessionId() {
+  try {
+    let id = sessionStorage.getItem(TAB_SESSION_KEY)
+    if (!id) {
+      id = crypto.randomUUID()
+      sessionStorage.setItem(TAB_SESSION_KEY, id)
+    }
+    const params = new URLSearchParams(window.location.search)
+    const returnedSession = params.get('spotify_session')
+    if (returnedSession) {
+      sessionStorage.setItem(TAB_SESSION_KEY, returnedSession)
+      window.history.replaceState({}, '', `${window.location.pathname}${window.location.hash}`)
+      id = returnedSession
+    }
+    return id
+  } catch {
+    return ''
+  }
+}
+
+export function spotifySessionHeaders() {
+  const id = getTabSessionId()
+  return id ? { 'X-Musync-Spotify-Session': id } : {}
+}
+
+export function spotifyLoginUrl() {
+  const id = getTabSessionId()
+  return `/api/spotify/login?tab=${encodeURIComponent(id)}`
+}
+
 const requestCounters = new Map()
 let dbgEnabled = true
-try { dbgEnabled = localStorage.getItem('musync-spotify-debug') !== 'off' } catch { /* noop */ }
+try { dbgEnabled = localStorage.getItem('musync-spotify-debug') !== 'off' } catch {}
 
 function trackLog(scope, source, label, extra = {}) {
   if (!dbgEnabled) return
@@ -39,8 +64,8 @@ function trackLog(scope, source, label, extra = {}) {
 const requestIdSeq = { n: 0 }
 function nextRequestId() { requestIdSeq.n += 1; return `r${requestIdSeq.n}` }
 
-function trackCacheKey({ genre = 'Any Genre', yearFrom, yearTo, difficulty = 0, limit = 50, offset = 0 } = {}) {
-  return JSON.stringify({ genre, yearFrom, yearTo, difficulty, limit, offset })
+function trackCacheKey({ genre = 'Any Genre', musicOrigin = 'Any', yearFrom, yearTo, difficulty = 0, limit = 50, offset = 0 } = {}) {
+  return JSON.stringify({ genre, musicOrigin, yearFrom, yearTo, difficulty, limit, offset })
 }
 
 function attachSpotifyError(error, data, response) {
@@ -58,7 +83,11 @@ async function fetchJson(url, options = {}) {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
   try {
-    const res = await fetch(url, { ...options, signal: controller.signal })
+    const res = await fetch(url, {
+      ...options,
+      headers: { ...spotifySessionHeaders(), ...(options.headers || {}) },
+      signal: controller.signal,
+    })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) {
       const error = new Error(data.error || `Spotify request failed: ${res.status}`)
@@ -77,11 +106,9 @@ async function fetchJson(url, options = {}) {
   }
 }
 
-// Ask the server whether the user has authorized Spotify (drives the
-// "Connect Spotify" prompt that enables difficulty tiers).
 export async function getSpotifyAuthStatus() {
   try {
-    const res = await fetch('/api/spotify/status')
+    const res = await fetch('/api/spotify/status', { headers: spotifySessionHeaders() })
     if (!res.ok) return { configured: isSpotifyConfigured, authed: isSpotifyAuthed }
     return await res.json()
   } catch {
@@ -89,10 +116,9 @@ export async function getSpotifyAuthStatus() {
   }
 }
 
-// Fetch a filtered pool of candidate tracks for the given filters. The server
-// applies discovery rules and attaches an approved anonymous audio source.
 export async function fetchTracks({
   genre = 'Any Genre',
+  musicOrigin,
   yearFrom,
   yearTo,
   difficulty = 0,
@@ -103,7 +129,7 @@ export async function fetchTracks({
   const requestedLimit = Math.min(Math.max(Number(limit) || 10, 1), 120)
   const effectiveOffset = Number.isFinite(offset) ? offset : 0
   const requestedOffset = Math.max(Math.floor(effectiveOffset / 10) * 10, 0)
-  const cacheKey = trackCacheKey({ genre, yearFrom, yearTo, difficulty, limit: requestedLimit, offset: requestedOffset })
+  const cacheKey = trackCacheKey({ genre, musicOrigin, yearFrom, yearTo, difficulty, limit: requestedLimit, offset: requestedOffset })
   const cached = trackCache.get(cacheKey)
   if (cached && cached.expiresAt > Date.now()) {
     trackLog('fetchTracks', source, 'cache-hit', { query: { genre, yearFrom, yearTo, difficulty }, requestId: nextRequestId() })
@@ -125,6 +151,7 @@ export async function fetchTracks({
 
   const sp = new URLSearchParams()
   if (genre && genre !== 'Any Genre') sp.set('genre', genre)
+  if (musicOrigin) sp.set('musicOrigin', musicOrigin === 'OPM / Local' ? 'OPM' : 'International')
   if (yearFrom) sp.set('yearFrom', String(yearFrom))
   if (yearTo) sp.set('yearTo', String(yearTo))
   sp.set('difficulty', String(difficulty))
@@ -134,8 +161,6 @@ export async function fetchTracks({
    try {
     const tracks = []
     const seen = new Set()
-    // Spotify currently rejects larger search pages for this app/API response;
-    // keep each upstream request at the accepted limit and aggregate locally.
     const pageSize = 10
     const maxPages = Math.ceil(requestedLimit / pageSize)
     for (let page = 0; page < maxPages; page += 1) {
@@ -203,8 +228,8 @@ export async function fetchTracksByIds(ids, { genre = 'Spotify', difficulty = 0,
   }
 }
 
-export async function fetchRandomTrack({ genre, yearFrom, yearTo, difficulty, recentIds = [] , source = 'unknown' } = {}) {
-  const tracks = await fetchTracks({ genre, yearFrom, yearTo, difficulty, limit: 120, source })
+export async function fetchRandomTrack({ genre, musicOrigin, yearFrom, yearTo, difficulty, recentIds = [] , source = 'unknown' } = {}) {
+  const tracks = await fetchTracks({ genre, musicOrigin, yearFrom, yearTo, difficulty, limit: 120, source })
   return selectGameTrack(tracks, recentIds)
 }
 
@@ -227,15 +252,15 @@ export async function resolveVSAudioPreview(track) {
   }
 }
 
-export async function fetchVSAudioTracks({ genre = 'Any Genre', limit = 30 } = {}) {
+export async function fetchVSAudioTracks({ genre = 'Any Genre', yearFrom, yearTo, limit = 30 } = {}) {
   try {
     const params = new URLSearchParams({ genre, limit: String(limit) })
     const response = await fetch(`/api/vs-audio-tracks?${params}`)
     const data = await response.json().catch(() => ({}))
-    return response.ok && Array.isArray(data.tracks) ? data.tracks : []
+    if (response.ok && Array.isArray(data.tracks) && data.tracks.length) return data.tracks
   } catch {
-    return []
   }
+  return getPopularFallbackTracks({ genre, yearFrom, yearTo, limit })
 }
 
 export async function searchCatalog(query, limit = 8, source = 'unknown') {
@@ -284,8 +309,6 @@ export async function searchCatalog(query, limit = 8, source = 'unknown') {
   return request
 }
 
-// Build the era's year window from an era label like "1980s", "2010s",
-// "Any Era". Returns { yearFrom, yearTo } or {} when no filtering.
 export function eraToYears(era) {
   if (!era || era === 'Any Era') return {}
   const m = String(era).match(/(\d{4})s/)

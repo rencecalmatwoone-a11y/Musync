@@ -1,5 +1,3 @@
--- Fix lobby visibility for authenticated and anonymous members.
--- Run this once in Supabase SQL Editor for an existing project.
 create or replace function public.is_lobby_member(p_lobby_id uuid)
 returns boolean
 language sql

@@ -6,7 +6,6 @@ import GameArea from './components/GameArea.js'
 import StatsPanel from './components/StatsPanel.js'
 import MultiplayerDashboard from './components/MultiplayerDashboard.js'
 import useMultiplayerGame from './hooks/useMultiplayerGame.js'
-import useFriendLobby from './hooks/useFriendLobby.js'
 import useSupabaseAuth from './hooks/useSupabaseAuth.js'
 import useOnlineLobby from './hooks/useOnlineLobby.js'
 import useOnlineGame from './hooks/useOnlineGame.js'
@@ -19,8 +18,6 @@ import useTrackAudio from './hooks/useTrackAudio.js'
 import { fetchRandomTrack, eraToYears } from './spotify/client.js'
 import { resetSessionTrackHistory } from './data/tracks.js'
 
-// Build a set of forgiving aliases from a track so a typed guess matches by
-// title, "artist title", or a meaningful title token.
 function buildAliases(track) {
   const title = String((track && track.title) || '').toLowerCase().trim()
   const artist = String((track && track.artist) || '').toLowerCase().trim()
@@ -46,6 +43,7 @@ export default function App() {
   const [mode, setMode] = useState(() => loadStat('musync-mode', 'classic'))
   const [era, setEra] = useState('Any Era')
   const [genre, setGenre] = useState('Any Genre')
+  const [musicOrigin, setMusicOrigin] = useState('International')
   const [classicDifficulty, setClassicDifficulty] = useState(() => loadStat('musync-classic-difficulty', loadStat('musync-difficulty', 1)))
   const [multiplayerDifficulty, setMultiplayerDifficulty] = useState(() => loadStat('musync-multiplayer-difficulty', loadStat('musync-difficulty', 1)))
   const [multiplayerPractice, setMultiplayerPractice] = useState(false)
@@ -67,8 +65,13 @@ export default function App() {
   const [classicAnswerLocked, setClassicAnswerLocked] = useState(false)
   const [classicResultCorrect, setClassicResultCorrect] = useState(false)
   const [classicRevealStartAt, setClassicRevealStartAt] = useState(0)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    if (params.has('spotify') || params.has('spotify_reason')) {
+      window.history.replaceState({}, '', `${window.location.pathname}${window.location.hash}`)
+    }
+  }, [])
 
-  // Classic-mode dynamic track sourced from the Spotify pool.
   const [classicTracks, setClassicTracks] = useState([])
   const [classicTrackId, setClassicTrackId] = useState(null)
   const [classicPoolLoading, setClassicPoolLoading] = useState(false)
@@ -78,14 +81,10 @@ export default function App() {
   const classicPlaybackPositionRef = useRef(0)
   const classicTrack = classicTracks.find((t) => t.id === classicTrackId) || null
 
-  // Load a fresh Spotify pool whenever the classic filters change, then pick a
-  // random starting track. This keeps genre / era / difficulty honest and
-  // guarantees no repeats within the recent-song cooldown.
-  // Resolve the active classic track from Spotify. Preview audio is optional in
-  // Spotify's response and is handled by the existing player UI.
   async function resolveClassicTrack(recentIds) {
-    const { yearFrom, yearTo } = eraToYears(era)
-    const track = await fetchRandomTrack({ genre, yearFrom, yearTo, difficulty: classicDifficulty, recentIds })
+    const { yearFrom, yearTo } = musicOrigin === 'OPM / Local' ? {} : eraToYears(era)
+    const searchGenre = musicOrigin === 'OPM / Local' ? 'Any Genre' : genre
+    const track = await fetchRandomTrack({ genre: searchGenre, musicOrigin, yearFrom, yearTo, difficulty: classicDifficulty, recentIds })
     return track ? { source: track.source, track } : null
   }
 
@@ -130,13 +129,12 @@ export default function App() {
     return () => {
       alive = false
     }
-  }, [mode, page, genre, era, classicDifficulty])
+  }, [mode, page, genre, musicOrigin, era, classicDifficulty])
 
   const classicDuration = (classicTrack && classicTrack.durationMs
     ? Math.min(15, Math.round(classicTrack.durationMs / 1000))
     : 15)
 
-  // Keep the approved anonymous audio URL attached to the selected track.
   const classicAudio = useTrackAudio(
     classicTrack ? classicTrack.id : null,
     classicTrack && classicTrack.playbackUrl ? classicTrack.playbackUrl : null,
@@ -170,14 +168,10 @@ export default function App() {
     classicPlaybackPositionRef.current = 0
   }
 
-  // Supabase online layer — available whenever it's configured. Sign-in is
-  // prompted by the dashboard when opening the online lobby, so the PLAY ONLINE
-  // option is always reachable (no deadlock on an already-authenticated user).
   const auth = useSupabaseAuth()
   const onlineActive = isSupabaseConfigured
   const multiplayerDisplayName = auth.user ? displayName : 'Anon'
   const game = useMultiplayerGame(multiplayerDisplayName)
-  const lobby = useFriendLobby(multiplayerDisplayName)
   const effectiveProfile = auth.profile ? { ...auth.profile, display_name: displayName } : { display_name: displayName }
   const onlineLobby = useOnlineLobby({ user: auth.user, profile: effectiveProfile, poolFilters: { genre, era, difficulty: multiplayerDifficulty } })
   const onlineGame = useOnlineGame({
@@ -201,7 +195,7 @@ export default function App() {
       localStorage.setItem('musync-attempts', JSON.stringify(attempts))
       localStorage.setItem('musync-name', JSON.stringify(displayName))
       localStorage.setItem('musync-stats-collapsed', JSON.stringify(statsCollapsed))
-    } catch { /* noop */ }
+    } catch {}
   }, [mode, classicDifficulty, multiplayerDifficulty, round, score, streak, correct, attempts, displayName, statsCollapsed])
 
   const accuracy = useMemo(
@@ -278,7 +272,6 @@ export default function App() {
               mode=${mode}
               onModeChange=${handleModeChange}
               game=${game}
-              lobby=${lobby}
               onStartMatch=${() => game.startGame({ genre, era, difficulty: multiplayerDifficulty })}
               auth=${auth}
               onlineActive=${onlineActive}
@@ -302,8 +295,10 @@ export default function App() {
                 <${GameArea}
                   era=${era}
                   genre=${genre}
+                  musicOrigin=${musicOrigin}
                   onEraChange=${setEra}
                   onGenreChange=${setGenre}
+                  onMusicOriginChange=${setMusicOrigin}
                   duration=${classicDuration}
                   trackId=${classicTrackId}
                   playbackUrl=${classicAudio.playbackUrl}

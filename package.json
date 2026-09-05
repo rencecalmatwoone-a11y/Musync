@@ -3,8 +3,17 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
   "scripts": {
-    "dev": "node server.js"
+    "build": "node scripts/build.mjs",
+    "dev": "node server.js",
+    "start": "node server.js",
+    "check": "node scripts/check.mjs",
+    "test:deployment": "node --test scripts/deployment.test.mjs",
+    "test": "node scripts/verify-global-track-selection.mjs",
+    "check:selection": "node scripts/selection-diversity-check.mjs"
   },
   "dependencies": {
     "ogl": "^1.0.11"

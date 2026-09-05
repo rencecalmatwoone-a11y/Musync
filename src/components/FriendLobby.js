@@ -26,7 +26,7 @@ function PlayerRow({ player, isHost, onToggleReady }) {
             </button>
           `
         : html`
-            <span className="fl-row__guest-badge">GUEST</span>
+            <span className="fl-row__guest-badge">PLAYER</span>
           `}
     </div>
   `

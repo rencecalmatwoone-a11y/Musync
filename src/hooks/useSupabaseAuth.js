@@ -2,8 +2,6 @@ import { useState, useEffect, useCallback, useRef } from 'https://esm.sh/react@1
 import { getSupabase, isSupabaseConfigured } from '../supabase/client.js'
 import { fetchLeaderboard } from '../supabase/db.js'
 
-// Supabase Auth state management: supports anonymous sign-in and email/password
-// for player identity. The profile provider is used for the app shell.
 export default function useSupabaseAuth() {
   const [status, setStatus] = useState(isSupabaseConfigured ? 'loading' : 'disabled')
   const [user, setUser] = useState(null)
@@ -20,10 +18,9 @@ export default function useSupabaseAuth() {
         .eq('id', uid)
         .maybeSingle()
       if (data) setProfile(data)
-    } catch { /* noop */ }
+    } catch {}
   }, [])
 
-  // Load current session + leaderboard on mount
   useEffect(() => {
     let alive = true
     let unsubscribe = null
@@ -44,12 +41,9 @@ export default function useSupabaseAuth() {
           setStatus('signed_out')
         }
 
-        // Realtime leaderboard (postgres_changes on match_results via view isn't
-        // directly subscribable, so refresh on session events + periodic).
         const lb = await fetchLeaderboard()
         if (alive) setLeaderboard(lb)
 
-        // Listen for auth changes
         const { data: sub } = sb.auth.onAuthStateChange((_event, session) => {
           if (!alive) return
           if (session?.user) {
@@ -121,7 +115,7 @@ export default function useSupabaseAuth() {
     try {
       const sb = await getSupabase()
       await sb.auth.signOut()
-    } catch { /* noop */ }
+    } catch {}
     setUser(null)
     setProfile(null)
     setStatus('signed_out')

@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from 'https://esm.sh/react@19'
+import { spotifySessionHeaders } from '../spotify/client.js'
+import useAudioVolume, { getAudioVolume } from './useAudioSettings.js'
 
 export default function useTrackAudio(songId, knownPlaybackUrl = null, knownPlaybackType = 'unavailable') {
   const [state, setState] = useState({
@@ -35,6 +37,25 @@ const playback = {
   readyReject: null,
 }
 
+async function applySpotifyVolume(value = getAudioVolume()) {
+  if (!playback.player || typeof playback.player.setVolume !== 'function') return
+  try {
+    await playback.player.setVolume(value)
+  } catch {
+  }
+}
+
+export async function disconnectSpotifyPlayback() {
+  if (playback.player) {
+    try { await playback.player.disconnect() } catch {}
+  }
+  playback.player = null
+  playback.token = null
+  playback.deviceId = null
+  playback.initializing = null
+  publishPlayback({ status: 'idle', error: null })
+}
+
 function playbackSnapshot() {
   return { status: playback.status, deviceId: playback.deviceId, error: playback.error }
 }
@@ -46,7 +67,7 @@ function publishPlayback(next) {
 }
 
 async function fetchPlaybackToken() {
-  const response = await fetch('/api/spotify/playback-token')
+  const response = await fetch('/api/spotify/playback-token', { headers: spotifySessionHeaders() })
   const data = await response.json().catch(() => ({}))
   if (!response.ok || !data.accessToken) {
     const error = new Error(data.error || 'Spotify login is required for playback.')
@@ -58,7 +79,7 @@ async function fetchPlaybackToken() {
 }
 
 async function fetchPlaybackEligibility() {
-  const response = await fetch('/api/spotify/eligibility')
+  const response = await fetch('/api/spotify/eligibility', { headers: spotifySessionHeaders() })
   const data = await response.json().catch(() => ({}))
   if (!response.ok || !data.authenticated) {
     const error = new Error(data.error || 'Spotify login is required for playback.')
@@ -109,14 +130,18 @@ async function initializeSpotifyPlayer() {
         getOAuthToken: async (callback) => {
           try { callback(await fetchPlaybackToken()) } catch { callback('') }
         },
-        volume: 0.8,
+        volume: getAudioVolume(),
       })
       player.addListener('ready', ({ device_id: deviceId }) => {
+        playback.deviceId = deviceId
         publishPlayback({ status: 'ready', deviceId, error: null })
         if (playback.readyResolve) playback.readyResolve(deviceId)
       })
       player.addListener('not_ready', ({ device_id: deviceId }) => {
-        if (playback.deviceId === deviceId) publishPlayback({ status: 'not-ready', deviceId: null })
+        if (playback.deviceId === deviceId) {
+          playback.deviceId = null
+          publishPlayback({ status: 'not-ready', deviceId: null })
+        }
       })
       player.addListener('initialization_error', ({ message }) => {
         const error = new Error(`Spotify player initialization failed: ${message}`)
@@ -141,6 +166,7 @@ async function initializeSpotifyPlayer() {
         ready,
         new Promise((_, reject) => setTimeout(() => reject(new Error('Musync Spotify device was not ready.')), 10000)),
       ])
+      await applySpotifyVolume()
       return player
     } catch (error) {
       publishPlayback({
@@ -174,6 +200,7 @@ async function spotifyPlaybackRequest(path, options = {}) {
 
 export function useSpotifyPlayback(enabled = true) {
   const [snapshot, setSnapshot] = useState(playbackSnapshot())
+  const volume = useAudioVolume()
 
   useEffect(() => {
     playbackListeners.add(setSnapshot)
@@ -182,10 +209,17 @@ export function useSpotifyPlayback(enabled = true) {
     return () => playbackListeners.delete(setSnapshot)
   }, [enabled])
 
+  useEffect(() => {
+    if (playback.player && typeof playback.player.setVolume === 'function') {
+      playback.player.setVolume(volume).catch?.(() => {})
+    }
+  }, [volume])
+
   const playTrack = useCallback(async (trackId) => {
     if (!trackId) return false
     try {
       await initializeSpotifyPlayer()
+      await applySpotifyVolume()
       if (!playback.deviceId) throw new Error('Musync Spotify device is not ready yet.')
       await spotifyPlaybackRequest('/me/player', {
         method: 'PUT',
@@ -205,11 +239,17 @@ export function useSpotifyPlayback(enabled = true) {
 
   const ensureReady = useCallback(() => initializeSpotifyPlayer(), [])
 
+  const activateElement = useCallback(() => {
+    if (playback.player && typeof playback.player.activateElement === 'function') {
+      playback.player.activateElement()
+    }
+  }, [])
+
   const pause = useCallback(async () => {
     if (!playback.deviceId) return
-    try { await spotifyPlaybackRequest('/me/player/pause', { method: 'PUT' }) } catch { /* Media errors must not alter game state. */ }
+    try { await spotifyPlaybackRequest('/me/player/pause', { method: 'PUT' }) } catch {}
     publishPlayback({ status: 'paused' })
   }, [])
 
-  return { ...snapshot, ready: ['ready', 'playing', 'paused'].includes(snapshot.status), playTrack, ensureReady, pause }
+  return { ...snapshot, ready: ['ready', 'playing', 'paused'].includes(snapshot.status), playTrack, ensureReady, activateElement, pause }
 }

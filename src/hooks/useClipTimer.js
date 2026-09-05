@@ -50,7 +50,6 @@ export default function useClipTimer(duration = 15) {
     }
   }, [playing, elapsed, duration])
 
-  // Start a fresh clip from the beginning (reset timer to 0 and begin playing).
   const play = useCallback(() => {
     clearFrame()
     baseElapsed.current = 0

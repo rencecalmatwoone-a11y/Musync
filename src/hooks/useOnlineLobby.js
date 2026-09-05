@@ -1,8 +1,3 @@
-// Supabase-backed lobby + match session lifecycle.
-//
-// Mirrors the local useFriendLobby surface (code, ready, start) so the same
-// FriendLobby UI is reused, but state is authoritative in Supabase and fanned
-// out to every client via Realtime. Requires an authenticated Supabase session.
 import { useState, useCallback, useEffect, useMemo, useRef } from 'https://esm.sh/react@19'
 import { isSupabaseConfigured } from '../supabase/client.js'
 import {
@@ -42,7 +37,7 @@ export default function useOnlineLobby({ user, profile, poolFilters }) {
   const [leaderboard, setLeaderboard] = useState([])
   const [gameOver, setGameOver] = useState(false)
   const [error, setError] = useState(null)
-  const [phase, setPhase] = useState('idle') // idle | lobby | live | results
+  const [phase, setPhase] = useState('idle')
   const [lobbyId, setLobbyId] = useState(null)
   const lobbyIdRef = useRef(null)
   const sessionIdRef = useRef(null)
@@ -52,8 +47,6 @@ export default function useOnlineLobby({ user, profile, poolFilters }) {
 
   const userId = user?.id
 
-  // Pull authoritative match state (rounds, live player stats, persisted
-  // results). When results exist the match is over and we surface them.
   const refreshState = useCallback(async () => {
     if (!sessionIdRef.current) return
     const [rs, sp, res] = await Promise.all([
@@ -112,15 +105,11 @@ export default function useOnlineLobby({ user, profile, poolFilters }) {
         await subscribeSessionUpdates(s.id)
       }
     }
-    // Once we know about a session, also reflect authoritative match state so a
-    // lobby-only client (e.g. the guest) transitions to results the moment the
-    // match is finalized (including when the match ends with one player left).
     if (sessionIdRef.current) {
       await refreshState()
     }
   }, [userId, refreshState, subscribeSessionUpdates])
 
-  // Subscribe to realtime lobby + members
   useEffect(() => {
     if (!lobbyId || !userId) return
     ;(async () => {
@@ -131,8 +120,6 @@ export default function useOnlineLobby({ user, profile, poolFilters }) {
     return () => stopSub()
   }, [lobbyId, userId, refresh, stopSub])
 
-  // Realtime is the primary synchronization path; polling recovers from a
-  // dropped event or a temporarily unavailable realtime connection.
   useEffect(() => {
     if (!lobbyId || !userId || phase !== 'lobby') return
     const interval = setInterval(() => {
@@ -190,7 +177,6 @@ export default function useOnlineLobby({ user, profile, poolFilters }) {
     }
   }, [myReady])
 
-  // Start the match with the authoritative song order
   const start = useCallback(async () => {
     const currentLobbyId = lobbyIdRef.current
     if (!currentLobbyId || startInFlightRef.current) return
@@ -207,8 +193,6 @@ export default function useOnlineLobby({ user, profile, poolFilters }) {
 
       resetSessionTrackHistory()
 
-      // Build a randomized Spotify pool (genre / era / difficulty aligned) so
-      // every client in the match resolves the host's exact song ids.
       const { genre, era, difficulty } = poolFilters || {}
       const { yearFrom, yearTo } = eraToYears(era)
       const tracks = await fetchTracks({ genre, yearFrom, yearTo, difficulty, limit: 120, offset: 0 })
@@ -241,10 +225,6 @@ export default function useOnlineLobby({ user, profile, poolFilters }) {
     await refreshState()
   }, [userId, refreshState])
 
-  // Safe exit: remove membership on the server, tear down realtime, and reset
-  // all local state so the user lands back on the fresh online lobby screen.
-  // The other player can keep playing — only this player's lobby membership and
-  // session stats are removed.
   const leave = useCallback(async () => {
     const lid = lobbyIdRef.current
     stopSub()
@@ -264,12 +244,10 @@ export default function useOnlineLobby({ user, profile, poolFilters }) {
       setError(null)
       setPhase('idle')
     }
-    // Even if the server call fails, still leave the local screen cleanly.
     if (lid) {
       try {
         await leaveLobby(lid)
       } catch {
-        /* keep going: tear down local state regardless */
       }
     }
     reset()
@@ -304,14 +282,12 @@ export default function useOnlineLobby({ user, profile, poolFilters }) {
     [hostMember, userId, displayName, members.length],
   )
 
-  // Poll leaderboard on results
   useEffect(() => {
     if (!gameOver) return
     fetchLeaderboard().then(setLeaderboard).catch(() => {})
   }, [gameOver])
 
   return {
-    // Parking lot of online state for the dashboard
     phase,
     code,
     inviteLink: code ? `${window.location.origin}${window.location.pathname}?room=${code}` : null,
@@ -324,7 +300,6 @@ export default function useOnlineLobby({ user, profile, poolFilters }) {
     leaderboard,
     gameOver,
     error,
-    // Mirrors useFriendLobby API used by FriendLobby
     host,
     guest,
     copied: false,

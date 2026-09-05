@@ -1,13 +1,13 @@
-# Logs
 logs
 *.log
 npm-debug.log*
 node_modules
 dist
+.vercel
+.tmp-*
 .DS_Store
 *.local
 
-# Secrets — never commit credentials
 .env
 .env.local
 .env.*

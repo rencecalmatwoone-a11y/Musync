@@ -1,9 +1,5 @@
-// Data-access layer over the Musync Supabase schema.
-// Every function here works against tables/RPCs defined in supabase/schema.sql
-// and returns plain, app-friendly shape. All calls are asynchronous.
 import { ensureSupabase } from './client.js'
 
-// ---- Lobbies / join / ready ------------------------------------------------
 
 export async function createLobby(displayName) {
   const sb = await ensureSupabase()
@@ -33,8 +29,6 @@ export async function setReady(lobbyId, ready) {
   if (error) throw error
 }
 
-// Remove the current user from a lobby / live match (safe exit). Leaves the
-// match, the other player's data, and leaderboard intact.
 export async function leaveLobby(lobbyId) {
   const sb = await ensureSupabase()
   const { error } = await sb.rpc('leave_lobby', {
@@ -64,7 +58,6 @@ export async function fetchLobby(lobbyId) {
   return data
 }
 
-// ---- Sessions / rounds -----------------------------------------------------
 
 export async function startMatch(lobbyId, songOrder, roundDuration = 10) {
   const sb = await ensureSupabase()
@@ -119,7 +112,6 @@ export async function fetchSessionPlayers(sessionId) {
   return data || []
 }
 
-// ---- Answers ---------------------------------------------------------------
 
 export async function submitAnswer(sessionId, roundNumber, answerId, isCorrect, points) {
   const sb = await ensureSupabase()
@@ -144,7 +136,6 @@ export async function fetchAnswers(sessionId, roundNumber) {
   return data || []
 }
 
-// ---- Results / leaderboard -------------------------------------------------
 
 export async function fetchResults(sessionId) {
   const sb = await ensureSupabase()

@@ -1,12 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'https://esm.sh/react@19'
+import useAudioVolume from './useAudioSettings.js'
 
-// Plays an officially supplied provider preview for a track. This is a thin wrapper
-// around an <audio> element: pass the elements the rendered <audio> node via
-// `audioRef` (or use the returned `audioEl` node directly), and pass `src`
-// (the preview URL) plus a `playing` boolean to keep playback in sync with the
-// rest of the clip timer. Falls back to silence when there is no preview URL.
 export default function usePreviewAudio() {
   const audioRef = useRef(null)
+  const volume = useAudioVolume()
   const [status, setStatus] = useState('idle')
   const [error, setError] = useState(null)
 
@@ -28,7 +25,7 @@ export default function usePreviewAudio() {
     }
     audioRef.current = node
     if (node) {
-      node.volume = 1
+      node.volume = volume
       node.loop = false
       node.preload = 'auto'
       let loadTimeout = null
@@ -67,7 +64,11 @@ export default function usePreviewAudio() {
         node.removeEventListener('ended', handleEnded)
       }
     }
-  }, [])
+  }, [volume])
+
+  useEffect(() => {
+    if (audioRef.current) audioRef.current.volume = volume
+  }, [volume])
 
   useEffect(() => {
     return () => {
@@ -76,10 +77,9 @@ export default function usePreviewAudio() {
     }
   }, [])
 
-  // Drive playback from a (src, playing) pair whenever they change.
   const sync = useCallback((src, playing) => {
     const el = audioRef.current
-    if (!el) return
+    if (!el) return Promise.resolve(false)
     const nextSrc = resolveSrc(src)
     if (playing && src) {
       console.log('[Audio] loading', { source: nextSrc })
@@ -89,10 +89,11 @@ export default function usePreviewAudio() {
         el.load()
       }
       setError(null)
-      el.play()
+      return el.play()
         .then(() => {
           console.log('[Audio] play started')
           setStatus('playing')
+          return true
         })
         .catch((e) => {
           setStatus('blocked')
@@ -101,6 +102,7 @@ export default function usePreviewAudio() {
               ? 'Tap Play to start audio.'
               : 'Audio preview could not be played.',
           )
+          return false
         })
     } else {
       el.pause()
@@ -110,6 +112,7 @@ export default function usePreviewAudio() {
       } else {
         setStatus('paused')
       }
+      return Promise.resolve(true)
     }
   }, [resolveSrc])
 
@@ -125,7 +128,6 @@ export default function usePreviewAudio() {
     try {
       el.currentTime = Math.max(0, Number(seconds) || 0)
     } catch {
-      /* Some browsers reject seeks before metadata; playback can still start. */
     }
     setError(null)
     return el.play()
@@ -175,7 +177,6 @@ export default function usePreviewAudio() {
       try {
         el.currentTime = Math.max(0, Number(seconds) || 0)
       } catch {
-        /* Ignore seeks before media metadata is available. */
       }
     }
   }, [])

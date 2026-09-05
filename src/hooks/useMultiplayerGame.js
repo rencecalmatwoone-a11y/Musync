@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from 'https://esm.s
 import { getActivePool, getTrackById, pickRoundTracks, resetSessionTrackHistory, selectGameTrack, setActivePool, secureShuffle } from '../data/tracks.js'
 import useRoundTimer from './useRoundTimer.js'
 import { fetchTracks, fetchVSAudioTracks, eraToYears, resolveVSAudioPreview } from '../spotify/client.js'
+import useAudioVolume, { getAudioVolume, setAudioVolume } from './useAudioSettings.js'
 
 const TOTAL_ROUNDS = 10
 const ROUND_DURATION = 10
@@ -16,10 +17,8 @@ function calcPoints(difficulty, timeLeft, totalDuration) {
   return base + speedBonus
 }
 
-// Every player (human + opponents) runs the same independent per-round
-// lifecycle: same song, own 10s timer, one locked answer, own reveal, then the
-// next round. Each player's actions only change their own score/streak/timer.
 export default function useMultiplayerGame(displayName = 'Elite Listener') {
+  const audioVolume = useAudioVolume()
   const [round, setRound] = useState(0)
   const [phase, setPhase] = useState('lobby')
   const [gameOver, setGameOver] = useState(false)
@@ -31,7 +30,6 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
   const roundFiltersRef = useRef({})
   const poolErrorRef = useRef(null)
 
-  // Human player (you) — own independent state
   const [youState, setYouState] = useState({
     score: 0,
     streak: 0,
@@ -49,9 +47,6 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
   const [feedback, setFeedback] = useState('')
   const [ticker, setTicker] = useState('')
 
-  // Opponents — only invited friends who join the private lobby via the 6-char
-  // code / invite link. No random/auto-matched players. Each runs the same
-  // independent round lifecycle.
   const [bots, setBots] = useState(() =>
     [].filter(Boolean)
       .map((p) => ({
@@ -71,9 +66,11 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
   const [settings, setSettings] = useState(() => {
     try {
       const saved = localStorage.getItem('musync-settings')
-      return saved ? JSON.parse(saved) : { sfx: true, volume: 80, reducedMotion: false, difficulty: 1 }
+      return saved
+        ? { sfx: true, reducedMotion: false, difficulty: 1, ...JSON.parse(saved), volume: Math.round(getAudioVolume() * 100) }
+        : { sfx: true, volume: Math.round(getAudioVolume() * 100), reducedMotion: false, difficulty: 1 }
     } catch {
-      return { sfx: true, volume: 80, reducedMotion: false, difficulty: 1 }
+      return { sfx: true, volume: Math.round(getAudioVolume() * 100), reducedMotion: false, difficulty: 1 }
     }
   })
 
@@ -94,9 +91,15 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
   )
 
   useEffect(() => {
+    setSettings((current) => current.volume === Math.round(audioVolume * 100)
+      ? current
+      : { ...current, volume: Math.round(audioVolume * 100) })
+  }, [audioVolume])
+
+  useEffect(() => {
     try {
       localStorage.setItem('musync-settings', JSON.stringify(settings))
-    } catch { /* noop */ }
+    } catch {}
   }, [settings])
 
   const clearBotTimers = useCallback(() => {
@@ -104,7 +107,6 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
     botTimersRef.current = []
   }, [])
 
-  // Settle a bot's answer at its reveal time (timer = 0).
   const settleBot = useCallback((botId, songId, lockMs) => {
      const song = getTrackById(songId)
     if (!song) return
@@ -113,7 +115,6 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
       prev.map((b) => {
         if (b.id !== botId) return b
         if (b.selectedAnswerId) {
-          // Bot already locked an answer — score it, reveal, keep locked.
           const correct = b.selectedAnswerId === songId
           const pts = correct
             ? calcPoints(song.difficulty, (ROUND_DURATION * 1000 - lockMs) / 1000, ROUND_DURATION)
@@ -126,13 +127,11 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
             revealed: true,
           }
         }
-        // Bot never locked — it timed out / missed.
         return { ...b, isCorrectAnswer: false, revealed: true }
       }),
     )
   }, [])
 
-  // Every bot follows the same lifecycle: lock an answer, then reveal at timer=0.
   const runBotRound = useCallback(
     (songId, roundDuration) => {
       clearBotTimers()
@@ -145,7 +144,6 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
       setBots((prev) => {
         const source = prev.length ? prev : (configuredBot ? [configuredBot] : [])
         return source.map((b) => {
-          // Reset this round's per-player state, keep cumulative score/correct.
           const opts = pickRoundTracks(song, 4)
           const correctIdx = opts.findIndex((o) => o.id === songId)
           const lockMs = 2500 + Math.random() * 3000
@@ -165,7 +163,6 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
         })
       })
 
-      // Schedule each bot's independent lock + reveal.
       activeBots.forEach((b) => {
         const lockMs = 2500 + Math.random() * 3000
         const lockId = setTimeout(() => {
@@ -226,7 +223,6 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
         const options = pickRoundTracks(song, 4)
       setRoundOptions(options)
 
-      // Reset human player's independent round state
       setYouState((s) => ({
         ...s,
         selectedAnswerId: null,
@@ -245,7 +241,6 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
     [timer, runBotRound],
   )
 
-  // Human player locks an answer (independent, locked, no reveal yet).
   const handleAnswer = useCallback(
     (optionId) => {
       const s = youRef.current
@@ -266,15 +261,12 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
         isCorrectAnswer: correct,
         pendingPoints: points,
         pendingTimeLeft: timer.remaining,
-        // Score/streak/asked are applied at reveal time (their timer=0) so the
-        // locked answer stays visible with no correct/wrong reveal yet.
       }))
       setFeedback('')
     },
     [currentSongId, roundOptions, timer.remaining],
   )
 
-  // Settle the human player when the visible 10s timer reaches 0.
   const settleHuman = useCallback(() => {
     setYouState((prev) => {
       const asked = prev.asked + 1
@@ -298,7 +290,6 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
           revealed: true,
         }
       }
-      // No answer selected — timeout / missed.
       setFeedback("Time's up! No guess submitted.")
       return {
         ...prev,
@@ -325,7 +316,6 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
     }
   }, [timer.expired, settleHuman])
 
-  // Auto-advance the reveal countdown before the next round.
   useEffect(() => {
     if (phase === 'reveal') {
       const id = setTimeout(() => advance(), REVEAL_DURATION * 1000)
@@ -333,9 +323,6 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
     }
   }, [phase, round, youState.revealed])
 
-  // Load a fresh Spotify pool (genre / era / difficulty aligned) and make it the
-  // active pool for this game so every round and its distractors draw from the
-  // same randomized pool.
   const loadGamePool = useCallback(async ({ genre, era, difficulty, vsAi = false } = {}) => {
     roundFiltersRef.current = { genre, era, difficulty }
     poolErrorRef.current = null
@@ -350,7 +337,7 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
       }
     } catch (error) {
       if (vsAi) {
-        const fallbackTracks = await fetchVSAudioTracks({ genre, limit: 30 })
+        const fallbackTracks = await fetchVSAudioTracks({ genre, ...eraToYears(era), limit: 30 })
         if (fallbackTracks.length) {
           setActivePool(fallbackTracks)
           songBagRef.current = []
@@ -364,7 +351,7 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
       return []
     }
     if (vsAi) {
-      const fallbackTracks = await fetchVSAudioTracks({ genre, limit: 30 })
+      const fallbackTracks = await fetchVSAudioTracks({ genre, ...eraToYears(era), limit: 30 })
       if (fallbackTracks.length) {
         setActivePool(fallbackTracks)
         songBagRef.current = []
@@ -432,9 +419,6 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
     [startRound, loadGamePool],
   )
 
-  // Exit back to the local Multiplayer lobby screen. Clears any running bot
-  // timers, resets every player to a fresh lobby state, and returns to the
-  // 'lobby' phase without touching the persistent settings.
   const resetToLobby = useCallback(() => {
     clearBotTimers()
     timer.clearTimer()
@@ -476,8 +460,6 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
     setPhase('lobby')
   }, [clearBotTimers, timer])
 
-  // Add a real friend who joined the private lobby to the independent roster.
-  // Safe to call repeatedly; no-ops if the friend is already present.
   const addFriend = useCallback((friend) => {
     if (!friend) return
     setBots((prev) => {
@@ -547,6 +529,7 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
   const yourRank = you ? you.rank : sortedPlayers.length
 
   const updateSettings = useCallback((updates) => {
+    if (updates.volume !== undefined) setAudioVolume(updates.volume)
     setSettings((prev) => ({ ...prev, ...updates }))
   }, [])
 

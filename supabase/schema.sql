@@ -1,26 +1,6 @@
--- =============================================================================
--- Musync Multiplayer — Supabase database schema
--- =============================================================================
--- Run this in the Supabase SQL editor (or `supabase db push`) against your
--- project. Extensions + tables + security (RLS) + functions + seed data.
---
--- Tables:
---   profiles           player identity profile linked to auth.users
---   lobbies            a private lobby with a unique 6-char code
---   lobby_members      players inside a lobby + ready status
---   game_sessions      one per started match (song order, current round)
---   session_rounds     per session per round (song, authoritative timings)
---   session_players    running per-player score/streak/correct within a session
---   player_answers     the locked answer a player submitted for a round
---   match_results      persisted final results per session per player
---   leaderboard        global lifetime leaderboard (view over results)
--- =============================================================================
 
 create extension if not exists "pgcrypto";
 
--- -----------------------------------------------------------------------------
--- PROFILES
--- -----------------------------------------------------------------------------
 create table if not exists public.profiles (
   id            uuid primary key references auth.users (id) on delete cascade,
   display_name  text not null default 'Player',
@@ -28,7 +8,6 @@ create table if not exists public.profiles (
   created_at    timestamptz not null default now()
 );
 
--- Automatically create a profile on sign-up
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
@@ -46,9 +25,6 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute procedure public.handle_new_user();
 
--- -----------------------------------------------------------------------------
--- LOBBIES
--- -----------------------------------------------------------------------------
 create table if not exists public.lobbies (
   id           uuid primary key default gen_random_uuid(),
   code         text not null unique,
@@ -57,9 +33,6 @@ create table if not exists public.lobbies (
   created_at   timestamptz not null default now()
 );
 
--- -----------------------------------------------------------------------------
--- LOBBY MEMBERS (players + ready status)
--- -----------------------------------------------------------------------------
 create table if not exists public.lobby_members (
   id          uuid primary key default gen_random_uuid(),
   lobby_id    uuid not null references public.lobbies (id) on delete cascade,
@@ -71,9 +44,6 @@ create table if not exists public.lobby_members (
   unique (lobby_id, user_id)
 );
 
--- -----------------------------------------------------------------------------
--- GAME SESSIONS (one per started match)
--- -----------------------------------------------------------------------------
 create table if not exists public.game_sessions (
   id            uuid primary key default gen_random_uuid(),
   lobby_id      uuid not null references public.lobbies (id) on delete cascade,
@@ -86,9 +56,6 @@ create table if not exists public.game_sessions (
   unique (lobby_id)
 );
 
--- -----------------------------------------------------------------------------
--- SESSION ROUNDS (song + authoritative timing per round)
--- -----------------------------------------------------------------------------
 create table if not exists public.session_rounds (
   id             uuid primary key default gen_random_uuid(),
   session_id     uuid not null references public.game_sessions (id) on delete cascade,
@@ -101,9 +68,6 @@ create table if not exists public.session_rounds (
   unique (session_id, round_number)
 );
 
--- -----------------------------------------------------------------------------
--- SESSION PLAYERS (running score / streak / correct per player in a session)
--- -----------------------------------------------------------------------------
 create table if not exists public.session_players (
   id          uuid primary key default gen_random_uuid(),
   session_id  uuid not null references public.game_sessions (id) on delete cascade,
@@ -116,9 +80,6 @@ create table if not exists public.session_players (
   unique (session_id, user_id)
 );
 
--- -----------------------------------------------------------------------------
--- PLAYER ANSWERS (one independent locked answer per round per player)
--- -----------------------------------------------------------------------------
 create table if not exists public.player_answers (
   id           uuid primary key default gen_random_uuid(),
   session_id   uuid not null references public.game_sessions (id) on delete cascade,
@@ -131,9 +92,6 @@ create table if not exists public.player_answers (
   unique (session_id, round_number, user_id)
 );
 
--- -----------------------------------------------------------------------------
--- MATCH RESULTS (persisted final results per session per player)
--- -----------------------------------------------------------------------------
 create table if not exists public.match_results (
   id           uuid primary key default gen_random_uuid(),
   session_id   uuid not null references public.game_sessions (id) on delete cascade,
@@ -148,9 +106,6 @@ create table if not exists public.match_results (
   unique (session_id, user_id)
 );
 
--- -----------------------------------------------------------------------------
--- GLOBAL LEADERBOARD (lifetime aggregate by player)
--- -----------------------------------------------------------------------------
 create or replace view public.leaderboard as
 select
   user_id,
@@ -163,9 +118,6 @@ select
 from public.match_results
 group by user_id;
 
--- -----------------------------------------------------------------------------
--- ROW LEVEL SECURITY
--- -----------------------------------------------------------------------------
 alter table public.profiles       enable row level security;
 alter table public.lobbies        enable row level security;
 alter table public.lobby_members  enable row level security;
@@ -175,7 +127,6 @@ alter table public.session_players enable row level security;
 alter table public.player_answers enable row level security;
 alter table public.match_results  enable row level security;
 
--- Profiles: users can read/update their own, read all for leaderboard/members
 drop policy if exists "profiles_select" on public.profiles;
 create policy "profiles_select" on public.profiles
   for select using (true);
@@ -183,7 +134,6 @@ drop policy if exists "profiles_update_own" on public.profiles;
 create policy "profiles_update_own" on public.profiles
   for update using (auth.uid() = id);
 
--- Lobbies: members can read, host can insert/update, deletion when host
 drop policy if exists "lobbies_select" on public.lobbies;
 create policy "lobbies_select" on public.lobbies
   for select using (
@@ -196,11 +146,6 @@ drop policy if exists "lobbies_update_host" on public.lobbies;
 create policy "lobbies_update_host" on public.lobbies
   for update using (host_id = auth.uid());
 
--- Lobby members: readable by members of the same lobby.
--- NOTE: the membership check must NOT reference lobby_members directly from its
--- own policy (that would cause "infinite recursion detected in policy for
--- relation lobby_members"). A SECURITY DEFINER helper bypasses RLS internally,
--- so it can safely query lobby_members without recursing.
 create or replace function public.is_lobby_member(p_lobby_id uuid)
 returns boolean
 language sql security definer stable as $$
@@ -210,8 +155,6 @@ language sql security definer stable as $$
   )
 $$;
 
--- Use the definer helper for lobby reads too. Referencing lobby_members
--- directly from this policy can hide the just-created lobby under RLS.
 drop policy if exists "lobbies_select" on public.lobbies;
 create policy "lobbies_select" on public.lobbies
   for select using ( public.is_lobby_member(id) );
@@ -226,7 +169,6 @@ drop policy if exists "members_update_own" on public.lobby_members;
 create policy "members_update_own" on public.lobby_members
   for update using (user_id = auth.uid());
 
--- Game sessions: members can read/update (sync via realtime)
 drop policy if exists "sessions_select" on public.game_sessions;
 create policy "sessions_select" on public.game_sessions
   for select using (
@@ -243,7 +185,6 @@ create policy "sessions_update" on public.game_sessions
     exists (select 1 from public.lobby_members m where m.lobby_id = game_sessions.lobby_id and m.user_id = auth.uid())
   );
 
--- Session rounds: members can read; host can insert/update
 drop policy if exists "rounds_select" on public.session_rounds;
 create policy "rounds_select" on public.session_rounds
   for select using (
@@ -270,7 +211,6 @@ create policy "rounds_update" on public.session_rounds
     )
   );
 
--- Session players: members can read/update own row within a session
 drop policy if exists "splayers_select" on public.session_players;
 create policy "splayers_select" on public.session_players
   for select using (
@@ -287,7 +227,6 @@ drop policy if exists "splayers_update_own" on public.session_players;
 create policy "splayers_update_own" on public.session_players
   for update using (user_id = auth.uid());
 
--- Player answers: members can insert own answers, read within the session
 drop policy if exists "answers_select" on public.player_answers;
 create policy "answers_select" on public.player_answers
   for select using (
@@ -301,16 +240,11 @@ drop policy if exists "answers_insert" on public.player_answers;
 create policy "answers_insert" on public.player_answers
   for insert with check (user_id = auth.uid());
 
--- Match results: members can read; inserting is via the finish function (definer)
 drop policy if exists "results_select" on public.match_results;
 create policy "results_select" on public.match_results
   for select using (true);
 
--- -----------------------------------------------------------------------------
--- STORED FUNCTIONS
--- -----------------------------------------------------------------------------
 
--- Create a lobby with a guaranteed-unique 6-char code
 create or replace function public.create_lobby(p_display_name text)
 returns public.lobbies
 language plpgsql
@@ -321,7 +255,6 @@ declare
   new_id   uuid := gen_random_uuid();
   ret      public.lobbies;
 begin
-  -- Generate a unique code (retry on collision)
   loop
     new_code := upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 6));
     exit when not exists (select 1 from public.lobbies where code = new_code);
@@ -336,7 +269,6 @@ begin
 end;
 $$;
 
--- Join a lobby by its 6-char code
 create or replace function public.join_lobby(p_code text, p_display_name text)
 returns public.lobbies
 language plpgsql
@@ -358,7 +290,6 @@ begin
 end;
 $$;
 
--- Mark the current user's ready status in a lobby
 create or replace function public.set_ready(p_lobby_id uuid, p_ready boolean)
 returns void
 language plpgsql
@@ -371,12 +302,6 @@ begin
 end;
 $$;
 
--- Safely remove the current user from a lobby (exit game / leave match).
--- Deletes only the leaving player's own lobby membership and their per-session
--- stats. The match itself (game_sessions / session_rounds) and the other
--- player's live session data are untouched. If this leaves the lobby with a
--- single player mid-match, the game ends immediately and the remaining player
--- wins: the match is finalized so match_results + the leaderboard reflect it.
 create or replace function public.leave_lobby(p_lobby_id uuid)
 returns void
 language plpgsql
@@ -397,8 +322,6 @@ begin
   delete from public.lobby_members
   where lobby_id = p_lobby_id and user_id = auth.uid();
 
-  -- A live match reduced to one remaining player: that player wins by
-  -- default, so finalize now so the standings + leaderboard settle.
   if sid is not null then
     select count(*) into remaining
     from public.lobby_members
@@ -411,7 +334,6 @@ begin
 end;
 $$;
 
--- Start the match: build session + rounds, flip lobby/round state
 drop function if exists public.start_match(uuid, jsonb, jsonb, integer);
 create or replace function public.start_match(
   p_lobby_id uuid,
@@ -458,17 +380,14 @@ begin
     raise exception 'INVALID_SONG_ORDER';
   end if;
 
-  -- Session
   insert into public.game_sessions (id, lobby_id, song_order, current_round, status,
     round_started_at, round_end_at)
   values (s_id, p_lobby_id, p_song_order, 1, 'live',
     now_ts, now_ts + (p_round_duration || ' seconds')::interval);
 
-  -- Per-player session stat rows
   insert into public.session_players (session_id, user_id, display_name)
   select s_id, m.user_id, m.display_name from public.lobby_members m where m.lobby_id = p_lobby_id;
 
-  -- Round rows retain the host's exact normalized provider track.
   for i in 1 .. jsonb_array_length(p_song_order) loop
     song_id := p_song_order->(i-1)->>'id';
     insert into public.session_rounds (session_id, round_number, song_id, track, duration_sec, started_at, end_at)
@@ -483,7 +402,6 @@ begin
 end;
 $$;
 
--- Advance to the next round (authoritative timer reset)
 create or replace function public.advance_round(p_session_id uuid, p_round_duration integer default 10)
 returns void
 language plpgsql
@@ -511,7 +429,6 @@ begin
 end;
 $$;
 
--- Record a player's answer for the current round and update their session stats
 create or replace function public.submit_answer(
   p_session_id uuid,
   p_round_number integer,
@@ -538,7 +455,6 @@ begin
 end;
 $$;
 
--- Compute and persist final match results + update lobby status
 create or replace function public.finalize_match(p_session_id uuid)
 returns void
 language plpgsql
@@ -569,7 +485,6 @@ begin
 end;
 $$;
 
--- Authorized-ish: only members, but answers recorded only by self (policies)
 grant usage on schema public to anon, authenticated;
 grant all on public.profiles to anon, authenticated;
 grant all on public.lobbies to anon, authenticated;
@@ -590,8 +505,6 @@ grant execute on function public.advance_round(uuid, integer) to anon, authentic
 grant execute on function public.submit_answer(uuid, integer, text, boolean, integer) to anon, authenticated;
 grant execute on function public.finalize_match(uuid) to anon, authenticated;
 
--- Realtime is required for lobby readiness and live match transitions. The
--- catalog check keeps this migration safe to re-run in an existing project.
 do $$
 declare
   table_name text;

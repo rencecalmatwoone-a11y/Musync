@@ -1,6 +1,7 @@
-import { useState } from 'https://esm.sh/react@19'
+import { useEffect, useState } from 'https://esm.sh/react@19'
 import { html } from '../html.js'
 import { DIFFICULTIES } from '../difficulty.js'
+import useAudioVolume, { setAudioVolume } from '../hooks/useAudioSettings.js'
 
 const DEFAULT_SETTINGS = { sfx: true, volume: 80, reducedMotion: false }
 
@@ -8,23 +9,26 @@ function loadSettings() {
   try {
     const saved = localStorage.getItem('musync-settings')
     if (saved) return { ...DEFAULT_SETTINGS, ...JSON.parse(saved) }
-  } catch { /* ignore */ }
+  } catch {}
   return { ...DEFAULT_SETTINGS }
 }
 
-// Settings page — themed to match the rest of Musync. Persists non-difficulty
-// prefs to the same musync-settings key used by the in-game SettingsPanel, and
-// shares the app-level difficulty (musync-difficulty) so it ties into scoring,
-// the theme, and the sidebar Difficulty control.
 export default function SettingsPage({ difficulty, onDifficultyChange, showDifficulty = true }) {
   const [settings, setSettings] = useState(loadSettings)
+  const audioVolume = useAudioVolume()
+
+  useEffect(() => {
+    const nextVolume = Math.round(audioVolume * 100)
+    setSettings((current) => current.volume === nextVolume ? current : { ...current, volume: nextVolume })
+  }, [audioVolume])
 
   function update(patch) {
     const next = { ...settings, ...patch }
     setSettings(next)
+    if (patch.volume !== undefined) setAudioVolume(patch.volume)
     try {
       localStorage.setItem('musync-settings', JSON.stringify(next))
-    } catch { /* ignore */ }
+    } catch {}
   }
 
   const groups = [

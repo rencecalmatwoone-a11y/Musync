@@ -3,32 +3,43 @@ import { html } from '../html.js'
 import useClipTimer from '../hooks/useClipTimer.js'
 import usePreviewAudio from '../hooks/usePreviewAudio.js'
 
-export default function BattleArena({ roundOptions, selectedAnswer, isCorrectAnswer, correctSongId, onAnswer, clipDuration, timerElapsed, timerDuration, phase, trackId = null, playbackUrl = null, audioLoading = false, audioError = null }) {
+export default function BattleArena({ roundOptions, selectedAnswer, isCorrectAnswer, correctSongId, onAnswer, clipDuration, timerElapsed, timerDuration, phase, roundKey = null, trackId = null, playbackUrl = null, audioLoading = false, audioError = null }) {
   const clip = useClipTimer(clipDuration)
-  const { attach, sync, error: previewError } = usePreviewAudio()
+  const { attach, sync, playFrom, error: previewError } = usePreviewAudio()
   const isLocked = Boolean(selectedAnswer)
   const showResult = phase === 'result'
 
   useEffect(() => {
-    sync(playbackUrl, phase === 'playing' && clip.playing)
+    const playback = sync(playbackUrl, phase === 'playing' && clip.playing)
+    playback.then((started) => {
+      if (!started && phase === 'playing' && clip.playing) clip.reset()
+    })
   }, [sync, playbackUrl, phase, clip.playing])
 
   useEffect(() => {
+    clip.reset()
     if (phase === 'playing' && playbackUrl) clip.play()
-    else clip.reset()
-  }, [roundOptions, phase, playbackUrl])
+  }, [roundKey, phase, playbackUrl])
 
   useEffect(() => {
     if (phase !== 'playing' && clip.playing) clip.toggle()
   }, [phase])
 
+  const progressElapsed = Number.isFinite(timerElapsed)
+    ? Math.max(0, Math.min(clipDuration, timerElapsed))
+    : clip.elapsed
   const playbackMessage = audioLoading
     ? 'Preparing audio...'
     : (audioError || previewError || (!playbackUrl && phase === 'playing' ? 'Preparing audio...' : ''))
 
   function handlePlayback() {
     if (!playbackUrl) return
+    if (clip.playing) {
+      clip.toggle()
+      return
+    }
     clip.toggle()
+    playFrom(playbackUrl, clip.elapsed)
   }
 
   useEffect(() => {
@@ -49,7 +60,7 @@ export default function BattleArena({ roundOptions, selectedAnswer, isCorrectAns
 
   return html`
     <section className="battle-arena">
-      <div className="radar">
+      <div className=${`radar${clip.playing ? ' is-playing' : ''}`}>
         <div className="radar__rings" aria-hidden="true"></div>
         ${Array.from({ length: 36 }, (_, index) => html`<span key=${index} className="radar__tick" style=${{ '--i': index, '--n': 36 }}></span>`)}
         <button type="button" className=${`radar__play${clip.playing ? ' is-playing' : ''}`} onClick=${handlePlayback} disabled=${audioLoading || !trackId} aria-label=${clip.playing ? 'Pause clip' : 'Play clip'}>
@@ -60,8 +71,8 @@ export default function BattleArena({ roundOptions, selectedAnswer, isCorrectAns
       </div>
       <audio ref=${attach} style=${{ display: 'none' }} />
       <div className="clip-progress">
-        <span>0:${String(Math.floor(clip.elapsed)).padStart(2, '0')}</span>
-        <div className="clip-progress__track"><div className="clip-progress__fill" style=${{ width: `${Math.min(100, (clip.elapsed / clipDuration) * 100)}%` }}></div></div>
+        <span>0:${String(Math.floor(progressElapsed)).padStart(2, '0')}</span>
+        <div className="clip-progress__track"><div className="clip-progress__fill" style=${{ width: `${Math.min(100, (progressElapsed / clipDuration) * 100)}%` }}></div></div>
         <span>0:${String(clipDuration).padStart(2, '0')}</span>
       </div>
       ${playbackMessage && html`<p className="audio-status audio-status--battle">${playbackMessage}</p>`}

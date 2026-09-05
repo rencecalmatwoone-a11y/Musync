@@ -9,21 +9,21 @@ const ERAS = [
 ]
 const GENRES = [
   'Any Genre', 'Pop', 'Rock', 'Hip-Hop', 'R&B', 'Electronic',
-  'Dance', 'Indie', 'Alternative', 'Metal', 'Jazz', 'Blues',
-  'Classical', 'Country', 'Folk', 'Reggae', 'Latin', 'Soul',
-  'Punk', 'Funk', 'Disco', 'Soundtrack',
+  'Latin', 'Country',
 ]
+const MUSIC_ORIGINS = ['International', 'OPM / Local']
 
-function FilterCarousel({ label, options, value, onChange }) {
-  const pageSize = 3
+function FilterCarousel({ label, options, value, onChange, disabled = false }) {
+  const pageSize = 1
   const selectedIndex = Math.max(0, options.indexOf(value))
-  const [page, setPage] = useState(Math.floor(selectedIndex / pageSize))
+  const pageCount = options.length
+  const [page, setPage] = useState(selectedIndex)
   const dragStart = useRef(null)
-  const pageCount = Math.ceil(options.length / pageSize)
-  const visible = options.slice(page * pageSize, page * pageSize + pageSize)
+  const visibleStart = page
+  const visible = options.slice(visibleStart, visibleStart + pageSize)
 
   useEffect(() => {
-    if (selectedIndex >= 0) setPage(Math.floor(selectedIndex / pageSize))
+    if (selectedIndex >= 0) setPage(selectedIndex)
   }, [value])
 
   function changePage(delta) {
@@ -54,7 +54,7 @@ function FilterCarousel({ label, options, value, onChange }) {
   }
 
   return html`
-    <div className="filter-group filter-group--wide">
+    <div className=${`filter-group filter-group--wide filter-group--${label.toLowerCase()}${options.length === 2 ? ' filter-group--origin' : ''}${disabled ? ' is-disabled' : ''}`}>
       <span className="filter-group__label">${label}</span>
       <div
         className="filter-carousel"
@@ -69,7 +69,7 @@ function FilterCarousel({ label, options, value, onChange }) {
           onPointerDown=${stopArrowPointer}
           onPointerUp=${stopArrowPointer}
           onClick=${(event) => { event.stopPropagation(); changePage(-1) }}
-          disabled=${pageCount <= 1}
+          disabled=${disabled || pageCount <= 1}
         >
           ‹
         </button>
@@ -80,6 +80,7 @@ function FilterCarousel({ label, options, value, onChange }) {
               type="button"
               className=${`filter-chip${option === value ? ' is-active' : ''}`}
               aria-pressed=${option === value}
+              disabled=${disabled}
               onPointerDown=${(event) => event.stopPropagation()}
               onClick=${(event) => selectOption(event, option)}
             >
@@ -94,7 +95,7 @@ function FilterCarousel({ label, options, value, onChange }) {
           onPointerDown=${stopArrowPointer}
           onPointerUp=${stopArrowPointer}
           onClick=${(event) => { event.stopPropagation(); changePage(1) }}
-          disabled=${pageCount <= 1}
+          disabled=${disabled || pageCount <= 1}
         >
           ›
         </button>
@@ -107,8 +108,10 @@ function FilterCarousel({ label, options, value, onChange }) {
 export default function GameArea({
   era,
   genre,
+  musicOrigin,
   onEraChange,
   onGenreChange,
+  onMusicOriginChange,
   duration,
   trackId,
   onSubmit,
@@ -128,9 +131,26 @@ export default function GameArea({
     <section className="game-area">
       <h2 className="headline">HOW WELL DO YOU KNOW YOUR MUSIC?</h2>
       <div className="filter-bar">
-        <${FilterCarousel} label="Era" options=${ERAS} value=${era} onChange=${onEraChange} />
+        <${FilterCarousel} label="Songs" options=${MUSIC_ORIGINS} value=${musicOrigin} onChange=${onMusicOriginChange} />
         <div className="filter-bar__divider" aria-hidden="true"></div>
-        <${FilterCarousel} label="Genre" options=${GENRES} value=${genre} onChange=${onGenreChange} />
+        <${FilterCarousel}
+          label="Era"
+          options=${ERAS}
+          value=${era}
+          onChange=${onEraChange}
+          disabled=${musicOrigin === 'OPM / Local'}
+        />
+        <div className="filter-bar__divider" aria-hidden="true"></div>
+        <${FilterCarousel}
+          label="Genre"
+          options=${GENRES}
+          value=${genre}
+          onChange=${onGenreChange}
+          disabled=${musicOrigin === 'OPM / Local'}
+        />
+      </div>
+      <div className=${`music-origin-badge music-origin-badge--${musicOrigin === 'OPM / Local' ? 'local' : 'international'}`}>
+        ${musicOrigin === 'OPM / Local' ? 'OPM / LOCAL SONGS' : 'INTERNATIONAL SONGS'}
       </div>
       <p className="listen-label">LISTEN CAREFULLY</p>
       <${AudioPlayer}

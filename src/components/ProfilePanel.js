@@ -1,8 +1,6 @@
 import { useState } from 'https://esm.sh/react@19'
 import { html } from '../html.js'
 
-// Profile page — themed to match the rest of Musync (dark cinematic + gold).
-// Reuses the site's design tokens and the settings toggle/diff patterns.
 export default function ProfilePanel({ name, onSaveName, profile, score, streak, accuracy, attempts, genre, onGenreChange }) {
   const [draft, setDraft] = useState(name || '')
   const [editing, setEditing] = useState(false)

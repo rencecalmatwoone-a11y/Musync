@@ -93,27 +93,6 @@ function matchWon(match) {
   return match?.won === true || match?.result === 'win' || match?.isWinner === true || match?.is_winner === true
 }
 
-/**
- * Return IDs newly earned from a completed match.
- *
- * match accepts:
- * {
- *   answers: [{ isCorrect, timeMs, genre, artist }],
- *   won: boolean,
- *   player: { accuracy, correct, asked },
- *   standings: [{ rank }],
- *   totalRounds: number,
- * }
- *
- * options accepts:
- * {
- *   unlockedAwardIds: string[],
- *   winHistory: [{ won: boolean }],
- *   totalWins: number,
- *   totalCorrect: number,
- *   totalAsked: number,
- * }
- */
 export function getNewAwardIds(match = {}, options = {}) {
   const answers = normalizeAnswers(match)
   const correctAnswers = answers.filter((answer) => answer.correct)

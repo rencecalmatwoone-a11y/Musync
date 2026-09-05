@@ -33,10 +33,8 @@ export default function AuthPanel({ auth, displayName, onClose, onDisplayNameCha
     `
   }
 
-  if (auth.status === 'authenticated' && auth.user) {
-    const display = auth.user.is_anonymous
-      ? (displayName || 'Anon')
-      : (auth.profile?.display_name || auth.user.email || 'Guest')
+  if (auth.status === 'authenticated' && auth.user && !auth.user.is_anonymous) {
+    const display = auth.profile?.display_name || auth.user.email || 'Player'
     return html`
       <div className="auth-modal">
         <div className="auth-modal__card">
@@ -45,7 +43,7 @@ export default function AuthPanel({ auth, displayName, onClose, onDisplayNameCha
             <span className="auth-user__avatar">${(display || '?').charAt(0).toUpperCase()}</span>
             <div>
               <strong>${display}</strong>
-              <small>${auth.user.email || 'Anonymous player'}</small>
+              <small>${auth.user.email}</small>
             </div>
           </div>
           <button type="button" className="auth-btn" onClick=${auth.signOut}>
@@ -71,40 +69,9 @@ export default function AuthPanel({ auth, displayName, onClose, onDisplayNameCha
           >
             EMAIL SIGN IN
           </button>
-          <button
-            type="button"
-            className=${`auth-tab${tab === 'anonymous' ? ' is-active' : ''}`}
-            onClick=${() => setTab('anonymous')}
-          >
-            GUEST SIGN IN
-          </button>
         </div>
 
-        ${tab === 'anonymous'
-          ? html`
-              <label className="auth-field">
-                DISPLAY NAME
-                <input
-                  type="text"
-                  value=${name}
-                  onInput=${(e) => setName(e.target.value)}
-                  placeholder="Elite Listener"
-                  maxLength="32"
-                />
-              </label>
-              <button
-                type="button"
-                className="auth-btn"
-                onClick=${async () => {
-                  if (onDisplayNameChange) onDisplayNameChange(name.trim() || 'Anon')
-                  await auth.signInAnonymously()
-                }}
-                disabled=${auth.status === 'loading'}
-              >
-                SIGN IN AS GUEST ▶
-              </button>
-            `
-          : html`
+        ${html`
               <label className="auth-field">
                 DISPLAY NAME
                 <input

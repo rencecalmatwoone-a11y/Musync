@@ -47,11 +47,11 @@ export default function AudioPlayer({
   const [modalState, setModalState] = useState(null)
   useEffect(() => {
     let intent = false
-    try { intent = new URLSearchParams(window.location.search).get('spotify') === 'auth' && localStorage.getItem('musync-spotify-play-intent') === '1' } catch { /* noop */ }
+    try { intent = new URLSearchParams(window.location.search).get('spotify') === 'auth' && localStorage.getItem('musync-spotify-play-intent') === '1' } catch {}
     if (!intent || !trackId) return undefined
     setModalState('connecting')
     spotify.ensureReady().then(() => {
-      try { localStorage.removeItem('musync-spotify-play-intent') } catch { /* noop */ }
+      try { localStorage.removeItem('musync-spotify-play-intent') } catch {}
       setModalState(null)
       setPlaying(true)
     }).catch((error) => setModalState(error.code === 'SPOTIFY_PREMIUM_REQUIRED' ? 'premium-required' : error.code === 'SPOTIFY_LOGIN_REQUIRED' ? 'login-required' : error.code === 'SPOTIFY_QUOTA_EXCEEDED' || /quota/i.test(error.message) ? 'quota-exceeded' : 'error'))
@@ -212,7 +212,7 @@ export default function AudioPlayer({
       </button>
       <${SpotifyPlaybackModal}
         state=${modalState}
-        onLogin=${() => { try { localStorage.setItem('musync-spotify-play-intent', '1') } catch { /* noop */ } }}
+        onLogin=${() => { try { localStorage.setItem('musync-spotify-play-intent', '1') } catch {} }}
         onPractice=${onPractice}
         onRetry=${() => { setModalState('connecting'); spotify.ensureReady().then(() => setModalState(null)).catch((error) => setModalState(error.code === 'SPOTIFY_PREMIUM_REQUIRED' ? 'premium-required' : error.code === 'SPOTIFY_LOGIN_REQUIRED' ? 'login-required' : error.code === 'SPOTIFY_QUOTA_EXCEEDED' || /quota/i.test(error.message) ? 'quota-exceeded' : 'error')) }}
         onBack=${() => setModalState(null)}

@@ -1,4 +1,6 @@
+import { useState } from 'https://esm.sh/react@19'
 import { html } from '../html.js'
+import { SpotifyAccountControl } from './Header.js'
 
 const ICONS = {
   game: html`
@@ -35,27 +37,48 @@ const ITEMS = [
 ]
 
 export default function Sidebar({ activePage, onNavigate }) {
+  const [menuOpen, setMenuOpen] = useState(false)
+
+  function navigate(page) {
+    onNavigate(page)
+    setMenuOpen(false)
+  }
+
   return html`
-    <aside className="sidebar">
+    <aside className=${`sidebar${menuOpen ? ' is-menu-open' : ''}`}>
       <div className="brand">
         <h1 className="brand__name">MUSYNC</h1>
       </div>
 
-      <nav className="nav" aria-label="Main">
-        ${ITEMS.map(
-          (item) => html`
-            <button
-              key=${item.id}
-              type="button"
-              className=${`nav-item${activePage === item.id ? ' is-active' : ''}`}
-              onClick=${() => onNavigate(item.id)}
-            >
-              ${ICONS[item.id]}
-              ${item.label}
-            </button>
-          `,
-        )}
-      </nav>
+      <button
+        type="button"
+        className="mobile-menu-toggle"
+        aria-label=${menuOpen ? 'Close navigation menu' : 'Open navigation menu'}
+        aria-expanded=${menuOpen}
+        onClick=${() => setMenuOpen((open) => !open)}
+      >
+        <span></span><span></span><span></span>
+      </button>
+
+      <div className="sidebar-menu">
+        <nav className="nav" aria-label="Main">
+          ${ITEMS.map(
+            (item) => html`
+              <button
+                key=${item.id}
+                type="button"
+                className=${`nav-item${activePage === item.id ? ' is-active' : ''}`}
+                onClick=${() => navigate(item.id)}
+              >
+                ${ICONS[item.id]}
+                ${item.label}
+              </button>
+            `,
+          )}
+        </nav>
+
+        <${SpotifyAccountControl} />
+      </div>
     </aside>
   `
 }

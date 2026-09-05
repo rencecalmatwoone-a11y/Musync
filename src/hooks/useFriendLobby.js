@@ -12,11 +12,6 @@ function makeCode(len = 6) {
 
 const HOST = { id: 'host', name: 'Elite Listener', you: true }
 
-// Local private-lobby state for the Friend Lobby / Invite system.
-// There is no backend in this build, so the "friend" is simulated locally as a
-// guest player that joins/readies via the same ready-gates the host uses. The
-// room code + invite link are real and the shape of the state maps 1:1 to a
-// future signaling/websocket backend.
 export default function useFriendLobby(displayName = 'Elite Listener') {
   const [code] = useState(() => makeCode(6))
   const [guest, setGuest] = useState(null)
@@ -34,14 +29,11 @@ export default function useFriendLobby(displayName = 'Elite Listener') {
     }
   }, [code])
 
-  // Invite a friend. In this local build the guest joins immediately; a real
-  // backend would resolve this via the room code/signaling.
   const inviteFriend = useCallback(() => {
     if (guest) return
     const friend = { id: 'guest', name: 'Friend', you: false }
     setGuest(friend)
     setCopied(false)
-    // Simulate the friend joining then marking ready after a short delay.
     guestReadyTimerRef.current = setTimeout(() => {
       setGuest((g) => (g ? { ...g, ready: true } : g))
     }, 1400)
@@ -65,7 +57,7 @@ export default function useFriendLobby(displayName = 'Elite Listener') {
       }
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
-    } catch { /* noop */ }
+    } catch {}
   }, [inviteLink])
 
   const bothReady = useMemo(

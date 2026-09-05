@@ -24,6 +24,11 @@ answers/scores/streaks, match results, and the leaderboard.
 
 ## 2. Enable Supabase Auth
 
+After the base schema, apply every SQL file in `migrations/` in filename order.
+Vercel deployments need `20260905_server_sessions.sql` for persistent Spotify
+sessions. See the [deployment guide](../docs/VERCEL.md) for server credentials
+and live authentication URLs.
+
 - **Authentication → Providers → Email**: enable email.
 - Anonymous sign-ins require **Authentication → Settings** →
   enable **Allow anonymous sign-ins**.

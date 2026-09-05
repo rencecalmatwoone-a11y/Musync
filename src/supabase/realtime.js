@@ -1,9 +1,3 @@
-// Realtime synchronization helper.
-//
-// Subscribes to postgres_changes on the tables that drive lobby + game state so
-// all clients converge on the same: lobby status, members/ready, the current
-// round, authoritative round timing, and live per-player scores. The host still
-// acts authoritatively (RPCs); Realtime fans state out to every member.
 import { ensureSupabase } from './client.js'
 
 const TABLE_WHITELIST = [

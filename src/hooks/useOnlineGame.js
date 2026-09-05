@@ -1,10 +1,3 @@
-// Online synchronized gameplay hook.
-//
-// Drives a Supabase-backed match so every player shares the same song, round
-// number, and a 10-second timer derived from authoritative server timestamps
-// (game_sessions.round_started_at / round_end_at), while each player's locked
-// answer, score, and streak remain independent (session_players). Round state,
-// scores, and results are fanned out over Realtime.
 import { useState, useCallback, useEffect, useMemo, useRef } from 'https://esm.sh/react@19'
 import { setActivePool, pickRoundTracks } from '../data/tracks.js'
 import { submitAnswer, fetchAnswers } from '../supabase/db.js'
@@ -13,13 +6,13 @@ const ROUND_DURATION = 10
 const REVEAL_SECONDS = 5
 
 export default function useOnlineGame({
-  session,           // game_sessions row (authoritative round + timings)
-  rounds,            // session_rounds rows
-  roundPlayers,      // session_players rows (live per-player score/streak)
-  user,              // current Supabase user
-  onAdvance,         // host advances to next round (RPC)
-  onResults,         // called when match is finished
-  poolFilters,       // { genre, era, difficulty } used to rebuild the shared pool
+  session,
+  rounds,
+  roundPlayers,
+  user,
+  onAdvance,
+  onResults,
+  poolFilters,
 }) {
   const userId = user?.id
 
@@ -80,7 +73,6 @@ export default function useOnlineGame({
     [roundPlayers, userId],
   )
 
-  // Authoritative countdown to round_end_at
   useEffect(() => {
     if (!roundEndAt || status !== 'live') return
     const tick = () => {
@@ -96,7 +88,6 @@ export default function useOnlineGame({
     return () => clearInterval(iv)
   }, [roundEndAt, status, currentRound])
 
-  // Reset per-round local state whenever the round changes
   useEffect(() => {
     submittedRef.current = false
     setSelectedAnswer(null)
@@ -105,8 +96,6 @@ export default function useOnlineGame({
     if (revealTimerRef.current) clearTimeout(revealTimerRef.current)
   }, [currentRound])
 
-  // Auto-advance reveal after REVEAL_SECONDS. The RPC is idempotent for the
-  // current round, so every client can recover if the host tab is backgrounded.
   useEffect(() => {
     if (showReveal && revealed) {
       revealTimerRef.current = setTimeout(() => {
@@ -116,7 +105,6 @@ export default function useOnlineGame({
     }
   }, [showReveal, revealed, status, onAdvance])
 
-  // Grab existing answers for the current round (realtime-synced)
   useEffect(() => {
     if (!session?.id || !currentRound || !userId) return
     let alive = true
@@ -146,7 +134,7 @@ export default function useOnlineGame({
       setSelectedAnswer(optionId)
       try {
         await submitAnswer(session.id, currentRound, optionId, correct, points)
-      } catch { /* keep local locked state even if push fails */ }
+      } catch {}
     },
     [session?.id, currentRound, song, revealed, remaining, status],
   )
