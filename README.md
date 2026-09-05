@@ -26,7 +26,7 @@ Restart the server after changing `.env`. Keep credentials out of Git.
 
 ```text
 Musync/
-|-- docs/reports/       Historical audits and investigation reports
+|-- docs/              Deployment instructions
 |-- public/            Static public assets
 |-- scripts/           Project validation and diagnostic scripts
 |-- server/
@@ -73,10 +73,3 @@ missing source files.
 `PORT` defaults to `5173`. `HOST` defaults to `127.0.0.1`, or `0.0.0.0` when
 `NODE_ENV=production`. The root launcher remains available for deployments that
 already use `node server.js`.
-
-## Reports
-
-The [forensic audit](docs/reports/FORENSIC_AUDIT_REPORT.md) is a historical
-snapshot. Its original root-level backend paths now correspond to
-`server/index.js` and `server/services/spotify.js`; its findings may not describe
-the current application.

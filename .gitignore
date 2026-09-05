@@ -4,6 +4,7 @@ npm-debug.log*
 node_modules
 dist
 .vercel
+docs/reports/FORENSIC_AUDIT_REPORT.md
 .tmp-*
 .DS_Store
 *.local
