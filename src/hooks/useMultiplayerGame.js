@@ -29,6 +29,9 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
   const recentSongsRef = useRef([])
   const roundFiltersRef = useRef({})
   const poolErrorRef = useRef(null)
+  const generationRef = useRef(0)
+  const startingRef = useRef(false)
+  const nextPoolOffsetRef = useRef(10)
 
   const [youState, setYouState] = useState({
     score: 0,
@@ -185,32 +188,65 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
   )
 
   const startRound = useCallback(
-    async (roundNum) => {
+    async (roundNum, generation = generationRef.current) => {
+      if (generation !== generationRef.current) return false
+      phaseRef.current = 'loading'
+      setPhase('loading')
+      timer.clearTimer()
+      clearBotTimers()
       const pool = getActivePool()
       if (!pool.length) {
         setFeedback('No playable Spotify tracks matched these filters.')
         setPhase('lobby')
-        return
+        return false
       }
       const available = pool.filter((item) => !recentSongsRef.current.includes(item.id))
       const candidates = available.length ? available : pool
       let song = null
-      let preview = null
       const tried = new Set()
       while (tried.size < candidates.length) {
-        const candidate = selectGameTrack(candidates.filter((item) => !tried.has(item.id)), recentSongsRef.current)
-        if (!candidate) break
-        tried.add(candidate.id)
-        preview = await resolveVSAudioPreview(candidate)
-        if (preview) {
-          song = { ...candidate, playbackUrl: preview.previewUrl, playbackType: 'preview', previewProvider: preview.provider, previewDuration: preview.duration }
+        // Friend/local matches retain their supplied Spotify playback metadata.
+        if (!practiceBotRef.current) {
+          song = selectGameTrack(candidates, recentSongsRef.current)
           break
         }
+        // A slow or missing preview must not block other playable candidates.
+        const batch = []
+        while (batch.length < 3 && tried.size < candidates.length) {
+          const candidate = selectGameTrack(candidates.filter((item) => !tried.has(item.id)), recentSongsRef.current)
+          if (!candidate) break
+          tried.add(candidate.id)
+          batch.push(candidate)
+        }
+        if (!batch.length) break
+        song = await Promise.any(batch.map(async (candidate) => {
+          const preview = candidate.previewProvider === 'deezer' && candidate.playbackUrl
+            ? { previewUrl: candidate.playbackUrl, provider: 'deezer', duration: candidate.previewDuration }
+            : await resolveVSAudioPreview(candidate)
+          if (!preview) throw new Error('Preview unavailable')
+          return { ...candidate, playbackUrl: preview.previewUrl, playbackType: 'preview', previewProvider: preview.provider, previewDuration: preview.duration }
+        })).catch(() => null)
+        if (generation !== generationRef.current) return false
+        if (song) break
       }
       if (!song) {
+        // Preserve the larger catalog search when the first page has no audio,
+        // without making every successful startup wait for all twelve pages.
+        if (practiceBotRef.current && pool[0]?.provider === 'spotify' && nextPoolOffsetRef.current < 120) {
+          const offset = nextPoolOffsetRef.current
+          nextPoolOffsetRef.current += 10
+          const { genre, era, difficulty } = roundFiltersRef.current
+          const more = await fetchTracks({ genre, ...eraToYears(era), difficulty, limit: 10, offset, timeoutMs: 8000 }).catch(() => [])
+          if (generation !== generationRef.current) return false
+          const newTracks = more.filter((track) => !pool.some((item) => item.id === track.id))
+          if (newTracks.length) {
+            setActivePool([...pool, ...newTracks])
+            return startRound(roundNum, generation)
+          }
+        }
         setFeedback('No playable preview was available. Please try again.')
         setPhase('lobby')
-        return
+        return false
       }
       recentSongsRef.current = [...recentSongsRef.current, song.id].slice(-15)
       setActivePool(getActivePool().map((item) => item.id === song.id ? song : item))
@@ -237,8 +273,9 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
       timer.reset(ROUND_DURATION)
       timer.start(ROUND_DURATION)
       runBotRound(song.id, ROUND_DURATION)
+      return true
     },
-    [timer, runBotRound],
+    [timer.clearTimer, timer.reset, timer.start, runBotRound, clearBotTimers],
   )
 
   const handleAnswer = useCallback(
@@ -301,6 +338,8 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
   }, [currentSongId, displayName])
 
   const advance = useCallback(() => {
+    if (phaseRef.current !== 'reveal') return
+    phaseRef.current = 'loading'
     if (round >= TOTAL_ROUNDS) {
       setGameOver(true)
       setPhase('gameover')
@@ -321,14 +360,16 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
       const id = setTimeout(() => advance(), REVEAL_DURATION * 1000)
       return () => clearTimeout(id)
     }
-  }, [phase, round, youState.revealed])
+  }, [phase, advance])
 
-  const loadGamePool = useCallback(async ({ genre, era, difficulty, vsAi = false } = {}) => {
+  const loadGamePool = useCallback(async ({ genre, era, difficulty, vsAi = false } = {}, generation) => {
     roundFiltersRef.current = { genre, era, difficulty }
+    nextPoolOffsetRef.current = 10
     poolErrorRef.current = null
     try {
       const { yearFrom, yearTo } = eraToYears(era)
-      const tracks = await fetchTracks({ genre, yearFrom, yearTo, difficulty, limit: 120, offset: 0 })
+      const tracks = await fetchTracks({ genre, yearFrom, yearTo, difficulty, limit: vsAi ? 10 : 120, offset: 0, allowPartial: vsAi, ...(vsAi ? { timeoutMs: 8000 } : {}) })
+      if (generation !== generationRef.current) return []
       if (tracks && tracks.length > 0) {
         setActivePool(tracks)
         songBagRef.current = []
@@ -336,8 +377,10 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
         return tracks
       }
     } catch (error) {
+      if (generation !== generationRef.current) return []
       if (vsAi) {
         const fallbackTracks = await fetchVSAudioTracks({ genre, ...eraToYears(era), limit: 30 })
+        if (generation !== generationRef.current) return []
         if (fallbackTracks.length) {
           setActivePool(fallbackTracks)
           songBagRef.current = []
@@ -352,6 +395,7 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
     }
     if (vsAi) {
       const fallbackTracks = await fetchVSAudioTracks({ genre, ...eraToYears(era), limit: 30 })
+      if (generation !== generationRef.current) return []
       if (fallbackTracks.length) {
         setActivePool(fallbackTracks)
         songBagRef.current = []
@@ -365,12 +409,22 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
 
   const startGame = useCallback(
     async (opts) => {
+      if (startingRef.current) return false
+      startingRef.current = true
+      const generation = ++generationRef.current
+      phaseRef.current = 'loading'
+      setPhase('loading')
+      setGameOver(false)
+      clearBotTimers()
+      timer.clearTimer()
+      try {
       resetSessionTrackHistory()
-      const pool = await loadGamePool({ ...(opts || {}), vsAi: Boolean(opts?.ai) })
+      const pool = await loadGamePool({ ...(opts || {}), vsAi: Boolean(opts?.ai) }, generation)
+      if (generation !== generationRef.current) return false
       if (!pool.length) {
         setFeedback(poolErrorRef.current || 'No playable Spotify tracks matched these filters.')
         setPhase('lobby')
-        return
+        return false
       }
       setGameOver(false)
       practiceBotRef.current = opts?.ai
@@ -414,12 +468,19 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
       }))
       setBots(nextBots)
       setTicker('')
-      startRound(1)
+      return await startRound(1, generation)
+      } finally {
+        if (generation === generationRef.current) startingRef.current = false
+      }
     },
-    [startRound, loadGamePool],
+    [startRound, loadGamePool, clearBotTimers, timer.clearTimer],
   )
 
   const resetToLobby = useCallback(() => {
+    generationRef.current += 1
+    startingRef.current = false
+    practiceBotRef.current = null
+    phaseRef.current = 'lobby'
     clearBotTimers()
     timer.clearTimer()
     setGameOver(false)
@@ -445,7 +506,7 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
       revealed: false,
     }))
     setBots((prev) =>
-      prev.map((b) => ({
+      prev.filter((b) => b.id !== 'ai-opponent').map((b) => ({
         ...b,
         score: 0,
         correct: 0,
@@ -458,7 +519,13 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
       })),
     )
     setPhase('lobby')
-  }, [clearBotTimers, timer])
+  }, [clearBotTimers, timer.clearTimer])
+
+  useEffect(() => () => {
+    generationRef.current += 1
+    startingRef.current = false
+    clearBotTimers()
+  }, [clearBotTimers])
 
   const addFriend = useCallback((friend) => {
     if (!friend) return

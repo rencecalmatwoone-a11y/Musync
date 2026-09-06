@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useCallback, useRef } from 'https://esm.sh/react@19'
+import { useMemo, useState, useEffect, useCallback, useRef, useReducer } from 'https://esm.sh/react@19'
 import { html } from './html.js'
 import Sidebar from './components/Sidebar.js'
 import Header from './components/Header.js'
@@ -17,6 +17,7 @@ import { difficultyKeyClass } from './difficulty.js'
 import useTrackAudio from './hooks/useTrackAudio.js'
 import { fetchRandomTrack, eraToYears } from './spotify/client.js'
 import { resetSessionTrackHistory } from './data/tracks.js'
+import { CLASSIC_STATS_KEY, restoreClassicStats, classicStatsReducer } from './classicStats.js'
 
 function buildAliases(track) {
   const title = String((track && track.title) || '').toLowerCase().trim()
@@ -48,11 +49,8 @@ export default function App() {
   const [multiplayerDifficulty, setMultiplayerDifficulty] = useState(() => loadStat('musync-multiplayer-difficulty', loadStat('musync-difficulty', 1)))
   const [multiplayerPractice, setMultiplayerPractice] = useState(false)
   const [practiceLaunchRequested, setPracticeLaunchRequested] = useState(false)
-  const [round, setRound] = useState(() => loadStat('musync-round', 4))
-  const [score, setScore] = useState(() => loadStat('musync-score', 1250))
-  const [streak, setStreak] = useState(() => loadStat('musync-streak', 5))
-  const [correct, setCorrect] = useState(() => loadStat('musync-correct', 23))
-  const [attempts, setAttempts] = useState(() => loadStat('musync-attempts', 25))
+  const [classicStats, updateClassicStats] = useReducer(classicStatsReducer, null, () => restoreClassicStats(loadStat(CLASSIC_STATS_KEY, null)))
+  const { round, score, streak, bestStreak, correct, attempts, roundsPlayed } = classicStats
   const [displayName, setDisplayName] = useState(() =>
     loadStat('musync-name', 'Elite Listener'),
   )
@@ -79,12 +77,14 @@ export default function App() {
   const classicRecentRef = useRef([])
   const classicNextRef = useRef(null)
   const classicPlaybackPositionRef = useRef(0)
+  const classicAdvancingRef = useRef(false)
+  const classicGenerationRef = useRef(0)
   const classicTrack = classicTracks.find((t) => t.id === classicTrackId) || null
 
   async function resolveClassicTrack(recentIds) {
     const { yearFrom, yearTo } = musicOrigin === 'OPM / Local' ? {} : eraToYears(era)
     const searchGenre = musicOrigin === 'OPM / Local' ? 'Any Genre' : genre
-    const track = await fetchRandomTrack({ genre: searchGenre, musicOrigin, yearFrom, yearTo, difficulty: classicDifficulty, recentIds })
+    const track = await fetchRandomTrack({ genre: searchGenre, musicOrigin, yearFrom, yearTo, difficulty: classicDifficulty, recentIds, source: 'classic' })
     return track ? { source: track.source, track } : null
   }
 
@@ -92,7 +92,10 @@ export default function App() {
     if (mode !== 'classic' || page !== 'game') return
     resetSessionTrackHistory()
     let alive = true
+    const generation = ++classicGenerationRef.current
     setClassicPoolLoading(true)
+    setClassicTracks([])
+    setClassicTrackId(null)
     setClassicPoolError(null)
     setClassicReveal(false)
     setClassicAnswerLocked(false)
@@ -104,6 +107,7 @@ export default function App() {
     resolveClassicTrack([]).then((resolved) => {
       if (!alive) return
       const track = resolved ? resolved.track : null
+      if (track) updateClassicStats({ type: 'advance' })
       const tracks = track ? [track] : []
       setClassicTracks(tracks)
       console.log(`[Track] tracks parsed: ${tracks.length}`)
@@ -128,6 +132,7 @@ export default function App() {
     })
     return () => {
       alive = false
+      if (classicGenerationRef.current === generation) classicGenerationRef.current += 1
     }
   }, [mode, page, genre, musicOrigin, era, classicDifficulty])
 
@@ -142,20 +147,23 @@ export default function App() {
   )
 
   async function nextClassicTrack() {
+    const generation = classicGenerationRef.current
     setClassicPoolLoading(true)
     setClassicPoolError(null)
     let resolved
     try {
       resolved = await resolveClassicTrack(classicRecentRef.current)
     } catch (error) {
+      if (generation !== classicGenerationRef.current) return false
       setClassicPoolLoading(false)
       setClassicPoolError(error?.message || 'Spotify could not load another song.')
-      return
+      return false
     }
+    if (generation !== classicGenerationRef.current) return false
     if (!resolved) {
       setClassicPoolLoading(false)
       setClassicPoolError('Could not find another unique song.')
-      return
+      return false
     }
     const next = resolved.track
     const recent = [...classicRecentRef.current, next.id].slice(-15)
@@ -166,6 +174,8 @@ export default function App() {
     setClassicResultCorrect(false)
     setClassicRevealStartAt(0)
     classicPlaybackPositionRef.current = 0
+    updateClassicStats({ type: 'advance' })
+    return true
   }
 
   const auth = useSupabaseAuth()
@@ -188,15 +198,11 @@ export default function App() {
       localStorage.setItem('musync-mode', JSON.stringify(mode))
       localStorage.setItem('musync-classic-difficulty', JSON.stringify(classicDifficulty))
       localStorage.setItem('musync-multiplayer-difficulty', JSON.stringify(multiplayerDifficulty))
-      localStorage.setItem('musync-round', JSON.stringify(round))
-      localStorage.setItem('musync-score', JSON.stringify(score))
-      localStorage.setItem('musync-streak', JSON.stringify(streak))
-      localStorage.setItem('musync-correct', JSON.stringify(correct))
-      localStorage.setItem('musync-attempts', JSON.stringify(attempts))
+      localStorage.setItem(CLASSIC_STATS_KEY, JSON.stringify(classicStats))
       localStorage.setItem('musync-name', JSON.stringify(displayName))
       localStorage.setItem('musync-stats-collapsed', JSON.stringify(statsCollapsed))
     } catch {}
-  }, [mode, classicDifficulty, multiplayerDifficulty, round, score, streak, correct, attempts, displayName, statsCollapsed])
+  }, [mode, classicDifficulty, multiplayerDifficulty, classicStats, displayName, statsCollapsed])
 
   const accuracy = useMemo(
     () => Math.round((correct / Math.max(attempts, 1)) * 100),
@@ -207,7 +213,7 @@ export default function App() {
   const multiplayerMode = mode === 'multiplayer'
 
   function submitGuess(raw) {
-    if (classicReveal || classicAnswerLocked) return
+    if (classicPoolLoading || classicReveal || classicAnswerLocked) return
     const active = classicTrack
     if (!active) return
     const guess = typeof raw === 'object'
@@ -222,27 +228,26 @@ export default function App() {
     const hit = selectedTrack
       ? selectedTrack.id === active.id
       : aliases.some((alias) => normalizedGuess.includes(normalize(alias)))
-    setAttempts((n) => n + 1)
+    const bonus = (classicDifficulty + 1) * 50 + streak * 10
+    updateClassicStats({ type: 'guess', correct: hit, points: bonus })
 
     if (hit) {
-      const bonus = (classicDifficulty + 1) * 50 + streak * 10
-      setScore((n) => n + bonus)
-      setStreak((n) => n + 1)
-      setCorrect((n) => n + 1)
-      setRound((n) => n + 1)
       setFeedback(`Correct — ${active.title} · +${bonus}`)
       setClassicAnswerLocked(true)
       setClassicResultCorrect(true)
       setClassicRevealStartAt(classicPlaybackPositionRef.current)
       setClassicReveal(true)
     } else {
-      setStreak(0)
       setFeedback('Incorrect answer. Keep listening.')
     }
   }
 
-  function advanceClassicRound() {
-    nextClassicTrack()
+  async function advanceClassicRound() {
+    if (classicAdvancingRef.current) return
+    classicAdvancingRef.current = true
+    let loaded
+    try { loaded = await nextClassicTrack() } finally { classicAdvancingRef.current = false }
+    if (!loaded) return
     setClassicReveal(false)
     setClassicAnswerLocked(false)
     setClassicResultCorrect(false)
@@ -250,6 +255,16 @@ export default function App() {
     classicPlaybackPositionRef.current = 0
     setFeedback('')
     setClassicUserGuess('')
+  }
+
+  function revealMissedClassicRound(position) {
+    if (!classicTrack || classicPoolLoading || classicReveal || classicAnswerLocked) return
+    updateClassicStats({ type: 'miss' })
+    const revealStart = Math.max(0, Number(position) || classicPlaybackPositionRef.current || 0)
+    setClassicAnswerLocked(true)
+    setClassicResultCorrect(false)
+    setClassicRevealStartAt(revealStart)
+    setClassicReveal(true)
   }
 
   function handleModeChange(newMode) {
@@ -272,6 +287,8 @@ export default function App() {
               mode=${mode}
               onModeChange=${handleModeChange}
               game=${game}
+              genre=${genre}
+              era=${era}
               onStartMatch=${() => game.startGame({ genre, era, difficulty: multiplayerDifficulty })}
               auth=${auth}
               onlineActive=${onlineActive}
@@ -281,6 +298,7 @@ export default function App() {
               onDifficultyChange=${setMultiplayerDifficulty}
               onPracticeStateChange=${setMultiplayerPractice}
               startInPractice=${practiceLaunchRequested}
+              onPracticeLaunchHandled=${() => setPracticeLaunchRequested(false)}
               onDisplayNameChange=${setDisplayName}
               displayName=${displayName}
             />`
@@ -305,20 +323,8 @@ export default function App() {
                   playbackType=${classicAudio.playbackType}
                   audioLoading=${classicPoolLoading || classicAudio.loading}
                   audioError=${classicPoolError || classicAudio.error}
-                  onSkip=${(position) => {
-                    const revealStart = Math.max(0, Number(position) || classicPlaybackPositionRef.current || 0)
-                    setClassicAnswerLocked(true)
-                    setClassicResultCorrect(false)
-                    setClassicRevealStartAt(revealStart)
-                    setClassicReveal(true)
-                  }}
-                  onExpire=${(position) => {
-                    const revealStart = Math.max(0, Number(position) || classicPlaybackPositionRef.current || 0)
-                    setClassicAnswerLocked(true)
-                    setClassicResultCorrect(false)
-                    setClassicRevealStartAt(revealStart)
-                    setClassicReveal(true)
-                  }}
+                  onSkip=${revealMissedClassicRound}
+                  onExpire=${revealMissedClassicRound}
                   onPlaybackPositionChange=${(position) => {
                     classicPlaybackPositionRef.current = Math.max(0, Number(position) || 0)
                   }}
@@ -354,7 +360,7 @@ export default function App() {
                     </article>
                     <article className="card">
                       <h3>BEST STREAK</h3>
-                      <strong>${Math.max(streak, 5)}x</strong>
+                      <strong>${bestStreak}x</strong>
                     </article>
                     <article className="card">
                       <h3>ACCURACY</h3>
@@ -362,7 +368,7 @@ export default function App() {
                     </article>
                     <article className="card">
                       <h3>ROUNDS PLAYED</h3>
-                      <strong>${attempts}</strong>
+                      <strong>${roundsPlayed}</strong>
                     </article>
                   </div>
                 </section>
@@ -373,8 +379,10 @@ export default function App() {
                   profile=${effectiveProfile}
                   score=${score}
                   streak=${streak}
+                  bestStreak=${bestStreak}
                   accuracy=${accuracy}
                   attempts=${attempts}
+                  roundsPlayed=${roundsPlayed}
                   genre=${genre}
                   onGenreChange=${setGenre}
                   name=${displayName}

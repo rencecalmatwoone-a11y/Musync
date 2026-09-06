@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'https://esm.sh/react@19'
 import { html } from '../html.js'
 import { useSpotifyPlayback } from '../hooks/useTrackAudio.js'
 import SpotifyPlaybackModal from './SpotifyPlaybackModal.js'
+import { hasSpotifyPlayIntent, getSpotifyAuthStatus } from '../spotify/client.js'
 
 const SIZE = 196
 const STROKE = 7
@@ -42,26 +43,53 @@ export default function AudioPlayer({
   onPractice = null,
 }) {
   const [playing, setPlaying] = useState(false)
+  const [audioStarted, setAudioStarted] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const spotify = useSpotifyPlayback(false)
   const [modalState, setModalState] = useState(null)
+  // Prepare the existing authenticated device so activateElement can run
+  // synchronously on the next Play gesture, before any network awaits.
   useEffect(() => {
-    let intent = false
-    try { intent = new URLSearchParams(window.location.search).get('spotify') === 'auth' && localStorage.getItem('musync-spotify-play-intent') === '1' } catch {}
+    let active = true
+    getSpotifyAuthStatus().then((status) => {
+      if (active && status.authed) spotify.ensureReady().catch(() => {})
+    })
+    return () => { active = false }
+  }, [])
+  useEffect(() => {
+    if (spotify.status === 'autoplay-blocked' || revealActive) setPlaying(false)
+  }, [spotify.status, revealActive])
+  useEffect(() => {
+    const intent = hasSpotifyPlayIntent()
     if (!intent || !trackId) return undefined
     setModalState('connecting')
+    let active = true
     spotify.ensureReady().then(() => {
+      if (!active) return
       try { localStorage.removeItem('musync-spotify-play-intent') } catch {}
       setModalState(null)
       setPlaying(true)
-    }).catch((error) => setModalState(error.code === 'SPOTIFY_PREMIUM_REQUIRED' ? 'premium-required' : error.code === 'SPOTIFY_LOGIN_REQUIRED' ? 'login-required' : error.code === 'SPOTIFY_QUOTA_EXCEEDED' || /quota/i.test(error.message) ? 'quota-exceeded' : 'error'))
-    return undefined
+    }).catch((error) => { if (active) setModalState(error.code === 'SPOTIFY_PREMIUM_REQUIRED' ? 'premium-required' : error.code === 'SPOTIFY_LOGIN_REQUIRED' ? 'login-required' : error.code === 'SPOTIFY_QUOTA_EXCEEDED' || /quota/i.test(error.message) ? 'quota-exceeded' : 'error') })
+    return () => { active = false }
   }, [trackId])
   useEffect(() => {
-    if (!trackId) return undefined
-    if (playing) spotify.playTrack(trackId)
-    else spotify.pause()
-    return () => { spotify.pause() }
+    setAudioStarted(false)
+    if (!trackId || !playing) return undefined
+    let active = true
+    let requested = false
+    // A discarded effect (including Strict Mode replay) issues no playback call.
+    Promise.resolve().then(async () => {
+      if (!active) return
+      requested = true
+      const started = await spotify.playTrack(trackId, { classic: true, positionMs: baseElapsed.current * 1000 })
+      if (!active) return
+      setAudioStarted(started)
+      if (!started) setPlaying(false)
+    })
+    return () => {
+      active = false
+      if (requested) spotify.pause()
+    }
   }, [playing, trackId])
   const startedAt = useRef(null)
   const baseElapsed = useRef(0)
@@ -70,7 +98,7 @@ export default function AudioPlayer({
   const atBoundary = elapsed >= duration || STAGES.includes(elapsed)
 
   useEffect(() => {
-    if (!playing) return undefined
+    if (!playing || !audioStarted) return undefined
 
     startedAt.current = performance.now()
     const tick = (now) => {
@@ -88,13 +116,15 @@ export default function AudioPlayer({
 
     frame.current = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(frame.current)
-  }, [playing])
+  }, [playing, audioStarted])
 
   useEffect(() => {
     if (onPlaybackPositionChange) onPlaybackPositionChange(elapsed)
   }, [elapsed, onPlaybackPositionChange])
 
   async function toggle() {
+    if (!trackId || audioLoading || revealActive) return
+    spotify.activateElement()
     if (playing) {
       baseElapsed.current = elapsed
       setPlaying(false)
@@ -113,6 +143,7 @@ export default function AudioPlayer({
         return
       }
       setModalState(null)
+      spotify.activateElement()
     }
     if (!trackId) {
       setModalState('error')
@@ -214,7 +245,7 @@ export default function AudioPlayer({
         state=${modalState}
         onLogin=${() => { try { localStorage.setItem('musync-spotify-play-intent', '1') } catch {} }}
         onPractice=${onPractice}
-        onRetry=${() => { setModalState('connecting'); spotify.ensureReady().then(() => setModalState(null)).catch((error) => setModalState(error.code === 'SPOTIFY_PREMIUM_REQUIRED' ? 'premium-required' : error.code === 'SPOTIFY_LOGIN_REQUIRED' ? 'login-required' : error.code === 'SPOTIFY_QUOTA_EXCEEDED' || /quota/i.test(error.message) ? 'quota-exceeded' : 'error')) }}
+        onRetry=${toggle}
         onBack=${() => setModalState(null)}
       />
     </div>

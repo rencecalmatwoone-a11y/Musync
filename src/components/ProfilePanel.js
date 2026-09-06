@@ -1,7 +1,7 @@
 import { useState } from 'https://esm.sh/react@19'
 import { html } from '../html.js'
 
-export default function ProfilePanel({ name, onSaveName, profile, score, streak, accuracy, attempts, genre, onGenreChange }) {
+export default function ProfilePanel({ name, onSaveName, profile, score, streak, bestStreak = streak, accuracy, attempts, roundsPlayed = attempts, genre, onGenreChange }) {
   const [draft, setDraft] = useState(name || '')
   const [editing, setEditing] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -11,9 +11,9 @@ export default function ProfilePanel({ name, onSaveName, profile, score, streak,
 
   const stats = [
     { label: 'LIFETIME SCORE', value: score.toLocaleString(), accent: true },
-    { label: 'BEST STREAK', value: `${Math.max(streak, 5)}x` },
+    { label: 'BEST STREAK', value: `${bestStreak}x` },
     { label: 'ACCURACY', value: `${accuracy}%` },
-    { label: 'ROUNDS PLAYED', value: attempts },
+    { label: 'ROUNDS PLAYED', value: roundsPlayed },
   ]
 
   const saveName = () => {

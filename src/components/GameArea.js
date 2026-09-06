@@ -27,7 +27,10 @@ function FilterCarousel({ label, options, value, onChange, disabled = false }) {
   }, [value])
 
   function changePage(delta) {
-    setPage((currentPage) => (currentPage + delta + pageCount) % pageCount)
+    if (disabled) return
+    const next = (page + delta + pageCount) % pageCount
+    setPage(next)
+    onChange(options[next])
   }
 
   function stopArrowPointer(event) {

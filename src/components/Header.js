@@ -2,7 +2,7 @@ import { useEffect, useState } from 'https://esm.sh/react@19'
 import { html } from '../html.js'
 import ModeToggle from './ModeToggle.js'
 import { disconnectSpotifyPlayback } from '../hooks/useTrackAudio.js'
-import { spotifyLoginUrl, spotifySessionHeaders } from '../spotify/client.js'
+import { spotifyLoginUrl, spotifySessionHeaders, getSpotifyAuthStatus, clearSpotifyClientSession } from '../spotify/client.js'
 
 export function SpotifyAccountControl() {
   const [spotifyAuthed, setSpotifyAuthed] = useState(false)
@@ -11,8 +11,7 @@ export function SpotifyAccountControl() {
 
   useEffect(() => {
     let alive = true
-    fetch('/api/spotify/status', { headers: spotifySessionHeaders() })
-      .then((response) => response.json())
+    getSpotifyAuthStatus()
       .then((status) => {
         if (alive) {
           setSpotifyAuthed(Boolean(status.authed))
@@ -28,6 +27,7 @@ export function SpotifyAccountControl() {
     try {
       await fetch('/api/spotify/logout', { method: 'POST', headers: spotifySessionHeaders() })
       await disconnectSpotifyPlayback()
+      clearSpotifyClientSession()
       setSpotifyAuthed(false)
     } finally {
       setLoggingOut(false)

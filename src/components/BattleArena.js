@@ -2,24 +2,28 @@ import { useEffect } from 'https://esm.sh/react@19'
 import { html } from '../html.js'
 import useClipTimer from '../hooks/useClipTimer.js'
 import usePreviewAudio from '../hooks/usePreviewAudio.js'
+import SpotifyBattlePlayback from './SpotifyBattlePlayback.js'
 
-export default function BattleArena({ roundOptions, selectedAnswer, isCorrectAnswer, correctSongId, onAnswer, clipDuration, timerElapsed, timerDuration, phase, roundKey = null, trackId = null, playbackUrl = null, audioLoading = false, audioError = null }) {
+export default function BattleArena({ roundOptions, selectedAnswer, isCorrectAnswer, correctSongId, onAnswer, clipDuration, timerElapsed, timerDuration, phase, roundKey = null, trackId = null, playbackUrl = null, playbackType = 'preview', audioLoading = false, audioError = null }) {
   const clip = useClipTimer(clipDuration)
   const { attach, sync, playFrom, error: previewError } = usePreviewAudio()
   const isLocked = Boolean(selectedAnswer)
   const showResult = phase === 'result'
+  const usesSpotify = playbackType === 'spotify-sdk'
+  const hasAudio = usesSpotify ? Boolean(trackId) : Boolean(playbackUrl)
 
   useEffect(() => {
+    if (usesSpotify) return
     const playback = sync(playbackUrl, phase === 'playing' && clip.playing)
     playback.then((started) => {
       if (!started && phase === 'playing' && clip.playing) clip.reset()
     })
-  }, [sync, playbackUrl, phase, clip.playing])
+  }, [sync, playbackUrl, phase, clip.playing, usesSpotify])
 
   useEffect(() => {
     clip.reset()
-    if (phase === 'playing' && playbackUrl) clip.play()
-  }, [roundKey, phase, playbackUrl])
+    if (phase === 'playing' && hasAudio) clip.play()
+  }, [roundKey, trackId, phase, playbackUrl, hasAudio])
 
   useEffect(() => {
     if (phase !== 'playing' && clip.playing) clip.toggle()
@@ -30,16 +34,16 @@ export default function BattleArena({ roundOptions, selectedAnswer, isCorrectAns
     : clip.elapsed
   const playbackMessage = audioLoading
     ? 'Preparing audio...'
-    : (audioError || previewError || (!playbackUrl && phase === 'playing' ? 'Preparing audio...' : ''))
+    : (audioError || (!usesSpotify && previewError) || (!hasAudio && phase === 'playing' ? 'Preparing audio...' : ''))
 
   function handlePlayback() {
-    if (!playbackUrl) return
+    if (!hasAudio) return
     if (clip.playing) {
       clip.toggle()
       return
     }
     clip.toggle()
-    playFrom(playbackUrl, clip.elapsed)
+    if (!usesSpotify) playFrom(playbackUrl, clip.elapsed)
   }
 
   useEffect(() => {
@@ -69,7 +73,9 @@ export default function BattleArena({ roundOptions, selectedAnswer, isCorrectAns
             : html`<svg viewBox="0 0 24 24" width="28" height="28"><polygon points="8,5 20,12 8,19" fill="#111" /></svg>`}
         </button>
       </div>
-      <audio ref=${attach} style=${{ display: 'none' }} />
+      ${usesSpotify
+        ? html`<${SpotifyBattlePlayback} trackId=${trackId} playing=${phase === 'playing' && clip.playing} onPlaybackFailed=${clip.reset} />`
+        : html`<audio ref=${attach} style=${{ display: 'none' }} />`}
       <div className="clip-progress">
         <span>0:${String(Math.floor(progressElapsed)).padStart(2, '0')}</span>
         <div className="clip-progress__track"><div className="clip-progress__fill" style=${{ width: `${Math.min(100, (progressElapsed / clipDuration) * 100)}%` }}></div></div>

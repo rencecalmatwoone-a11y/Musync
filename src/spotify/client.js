@@ -13,7 +13,12 @@ const trackRequests = new Map()
 const catalogCache = new Map()
 const catalogErrorCache = new Map()
 const catalogRequests = new Map()
+const authStatusCache = new Map()
+const authStatusRequests = new Map()
+const vsPreviewCache = new Map()
+const vsPreviewRequests = new Map()
 const TAB_SESSION_KEY = 'musync-spotify-tab-session'
+let returnedFromSpotify = false
 
 function getTabSessionId() {
   try {
@@ -26,13 +31,23 @@ function getTabSessionId() {
     const returnedSession = params.get('spotify_session')
     if (returnedSession) {
       sessionStorage.setItem(TAB_SESSION_KEY, returnedSession)
-      window.history.replaceState({}, '', `${window.location.pathname}${window.location.hash}`)
+      returnedFromSpotify = params.get('spotify') === 'auth'
+      params.delete('spotify_session')
+      const query = params.toString()
+      window.history.replaceState({}, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`)
       id = returnedSession
     }
     return id
   } catch {
     return ''
   }
+}
+
+// Capture the callback session before any React effect cleans up the URL.
+getTabSessionId()
+
+export function hasSpotifyPlayIntent() {
+  try { return returnedFromSpotify && localStorage.getItem('musync-spotify-play-intent') === '1' } catch { return false }
 }
 
 export function spotifySessionHeaders() {
@@ -81,7 +96,7 @@ function attachSpotifyError(error, data, response) {
 
 async function fetchJson(url, options = {}) {
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs || REQUEST_TIMEOUT_MS)
   try {
     const res = await fetch(url, {
       ...options,
@@ -107,13 +122,35 @@ async function fetchJson(url, options = {}) {
 }
 
 export async function getSpotifyAuthStatus() {
+  const headers = spotifySessionHeaders()
+  const session = headers['X-Musync-Spotify-Session'] || ''
+  const cached = authStatusCache.get(session)
+  if (cached && cached.expiresAt > Date.now()) return cached.status
+  if (authStatusRequests.has(session)) return authStatusRequests.get(session)
+  const request = (async () => {
+    try {
+      const res = await fetch('/api/spotify/status', { headers, signal: AbortSignal.timeout(15000) })
+      if (!res.ok) return { configured: isSpotifyConfigured, authed: isSpotifyAuthed }
+      const status = await res.json()
+      authStatusCache.set(session, { status, expiresAt: Date.now() + 30000 })
+      return status
+    } catch {
+      return { configured: isSpotifyConfigured, authed: isSpotifyAuthed }
+    }
+  })().finally(() => {
+    if (authStatusRequests.get(session) === request) authStatusRequests.delete(session)
+  })
+  authStatusRequests.set(session, request)
+  return request
+}
+
+export function clearSpotifyClientSession() {
+  returnedFromSpotify = false
   try {
-    const res = await fetch('/api/spotify/status', { headers: spotifySessionHeaders() })
-    if (!res.ok) return { configured: isSpotifyConfigured, authed: isSpotifyAuthed }
-    return await res.json()
-  } catch {
-    return { configured: isSpotifyConfigured, authed: isSpotifyAuthed }
-  }
+    sessionStorage.removeItem(TAB_SESSION_KEY)
+    localStorage.removeItem('musync-spotify-play-intent')
+  } catch {}
+  for (const cache of [authStatusCache, authStatusRequests, trackCache, trackErrorCache, trackRequests, catalogCache, catalogErrorCache, catalogRequests]) cache.clear()
 }
 
 export async function fetchTracks({
@@ -125,13 +162,17 @@ export async function fetchTracks({
   limit = 120,
   offset,
   source = 'unknown',
+  reusePool = false,
+  allowPartial = false,
+  timeoutMs = REQUEST_TIMEOUT_MS,
 } = {}) {
+  if (musicOrigin) musicOrigin = /^(opm|opm\s*\/\s*local)$/i.test(musicOrigin) ? 'OPM' : 'International'
   const requestedLimit = Math.min(Math.max(Number(limit) || 10, 1), 120)
   const effectiveOffset = Number.isFinite(offset) ? offset : 0
   const requestedOffset = Math.max(Math.floor(effectiveOffset / 10) * 10, 0)
-  const cacheKey = trackCacheKey({ genre, musicOrigin, yearFrom, yearTo, difficulty, limit: requestedLimit, offset: requestedOffset })
+  const cacheKey = JSON.stringify([getTabSessionId(), trackCacheKey({ genre, musicOrigin, yearFrom, yearTo, difficulty, limit: requestedLimit, offset: requestedOffset }), allowPartial, timeoutMs])
   const cached = trackCache.get(cacheKey)
-  if (cached && cached.expiresAt > Date.now()) {
+  if (cached && (cached.expiresAt > Date.now() || (reusePool && cached.tracks.length))) {
     trackLog('fetchTracks', source, 'cache-hit', { query: { genre, yearFrom, yearTo, difficulty }, requestId: nextRequestId() })
     if (dbgEnabled) console.log(`[SpotifyInstrument]  -> served ${cached.tracks.length} tracks from cache`)
     return cached.tracks
@@ -151,7 +192,7 @@ export async function fetchTracks({
 
   const sp = new URLSearchParams()
   if (genre && genre !== 'Any Genre') sp.set('genre', genre)
-  if (musicOrigin) sp.set('musicOrigin', musicOrigin === 'OPM / Local' ? 'OPM' : 'International')
+  if (musicOrigin) sp.set('musicOrigin', musicOrigin)
   if (yearFrom) sp.set('yearFrom', String(yearFrom))
   if (yearTo) sp.set('yearTo', String(yearTo))
   sp.set('difficulty', String(difficulty))
@@ -168,7 +209,14 @@ export async function fetchTracks({
       const remaining = requestedLimit - tracks.length
       pageParams.set('limit', String(Math.min(pageSize, remaining)))
       pageParams.set('offset', String(requestedOffset + page * pageSize))
-      const { res, data } = await fetchJson(`/api/spotify/tracks?${pageParams.toString()}`)
+      let result
+      try {
+        result = await fetchJson(`/api/spotify/tracks?${pageParams.toString()}`, { timeoutMs })
+      } catch (error) {
+        if (!allowPartial || !tracks.length) throw error
+        break
+      }
+      const { res, data } = result
       console.log('[Track] response received')
       if (!res.ok) {
         const error = new Error(data.error || `Spotify request failed: ${res.status}`)
@@ -229,12 +277,17 @@ export async function fetchTracksByIds(ids, { genre = 'Spotify', difficulty = 0,
 }
 
 export async function fetchRandomTrack({ genre, musicOrigin, yearFrom, yearTo, difficulty, recentIds = [] , source = 'unknown' } = {}) {
-  const tracks = await fetchTracks({ genre, musicOrigin, yearFrom, yearTo, difficulty, limit: 120, source })
+  const classic = source === 'classic'
+  const tracks = await fetchTracks({ genre, musicOrigin, yearFrom, yearTo, difficulty, limit: classic ? 30 : 120, source, reusePool: classic, allowPartial: classic })
   return selectGameTrack(tracks, recentIds)
 }
 
 export async function resolveVSAudioPreview(track) {
   if (!track?.id || !track.title || !track.artist) return null
+  const key = JSON.stringify([track.id, track.title, track.artist])
+  const cached = vsPreviewCache.get(key)
+  if (cached?.expiresAt > Date.now()) return cached.preview
+  if (vsPreviewRequests.has(key)) return vsPreviewRequests.get(key)
   const params = new URLSearchParams({
     trackId: track.id,
     title: track.title,
@@ -242,20 +295,27 @@ export async function resolveVSAudioPreview(track) {
     durationMs: String(track.durationMs || 30000),
   })
   if (track.isrc) params.set('isrc', track.isrc)
-  if (track.spotifyPreviewUrl) params.set('spotifyPreviewUrl', track.spotifyPreviewUrl)
+  const request = (async () => {
   try {
-    const response = await fetch(`/api/vs-audio-preview?${params}`)
+    const response = await fetch(`/api/vs-audio-preview?${params}`, { signal: AbortSignal.timeout(7000) })
     const data = await response.json().catch(() => ({}))
-    return response.ok && data.preview ? data.preview : null
+    const preview = response.ok && data.preview?.provider === 'deezer' ? data.preview : null
+    vsPreviewCache.set(key, { preview, expiresAt: Date.now() + (preview ? 5 * 60 * 1000 : 30000) })
+    return preview
   } catch {
     return null
+  } finally {
+    vsPreviewRequests.delete(key)
   }
+  })()
+  vsPreviewRequests.set(key, request)
+  return request
 }
 
 export async function fetchVSAudioTracks({ genre = 'Any Genre', yearFrom, yearTo, limit = 30 } = {}) {
   try {
     const params = new URLSearchParams({ genre, limit: String(limit) })
-    const response = await fetch(`/api/vs-audio-tracks?${params}`)
+    const response = await fetch(`/api/vs-audio-tracks?${params}`, { signal: AbortSignal.timeout(7000) })
     const data = await response.json().catch(() => ({}))
     if (response.ok && Array.isArray(data.tracks) && data.tracks.length) return data.tracks
   } catch {
@@ -267,7 +327,7 @@ export async function searchCatalog(query, limit = 8, source = 'unknown') {
   if (!String(query || '').trim()) return []
   const cleanQuery = String(query).trim()
   const requestedLimit = Math.min(Math.max(Number(limit) || 8, 1), 10)
-  const cacheKey = JSON.stringify({ query: cleanQuery.toLowerCase(), limit: requestedLimit })
+  const cacheKey = JSON.stringify({ session: getTabSessionId(), query: cleanQuery.toLowerCase(), limit: requestedLimit })
   const cached = catalogCache.get(cacheKey)
   if (cached && cached.expiresAt > Date.now()) {
     trackLog('searchCatalog', source, 'cache-hit', { query: cleanQuery })

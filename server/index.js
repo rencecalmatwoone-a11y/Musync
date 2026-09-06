@@ -14,7 +14,7 @@ import {
   clearUserSession,
   spotifyAuthStatus,
   getSpotifyUserProfile,
-  getSpotifyPlaybackToken,
+  getSpotifyPlaybackCredentials,
   getSpotifyPlaybackEligibility,
   checkSpotifyAvailability,
   spotifyDiagnostics,
@@ -220,16 +220,20 @@ async function handleRequest(req, res) {
     const sessionId = spotifySessionId(req)
     const status = await spotifyAuthStatus(sessionId)
     const profile = status.authed ? await getSpotifyUserProfile(sessionId).catch(() => null) : null
+    if (status.authed && !profile) status.authed = (await spotifyAuthStatus(sessionId)).authed
     sendJson(res, 200, { ...status, profile })
     return
   }
 
   if (relative === '/api/spotify/playback-token') {
     try {
-      const accessToken = await getSpotifyPlaybackToken(spotifySessionId(req))
-      sendJson(res, 200, { accessToken })
+      const authorization = String(req.headers.authorization || '')
+      const rejectedToken = authorization.startsWith('Bearer ') ? authorization.slice(7) : null
+      sendJson(res, 200, await getSpotifyPlaybackCredentials(spotifySessionId(req), rejectedToken))
     } catch (error) {
-      sendJson(res, Number(error?.status) === 401 ? 401 : 502, {
+      const status = Number(error?.status) === 401 ? 401 : Number(error?.status) === 429 ? 429 : 502
+      if (error?.retryAfterMs) res.setHeader('Retry-After', String(Math.ceil(error.retryAfterMs / 1000)))
+      sendJson(res, status, {
         error: error?.message || 'Spotify playback authentication failed.',
         code: error?.code || 'SPOTIFY_PLAYBACK_AUTH_ERROR',
       })
@@ -241,7 +245,9 @@ async function handleRequest(req, res) {
     try {
       sendJson(res, 200, await getSpotifyPlaybackEligibility(spotifySessionId(req)))
     } catch (error) {
-      sendJson(res, Number(error?.status) === 401 ? 401 : 502, {
+      const status = Number(error?.status) === 401 ? 401 : Number(error?.status) === 429 ? 429 : 502
+      if (error?.retryAfterMs) res.setHeader('Retry-After', String(Math.ceil(error.retryAfterMs / 1000)))
+      sendJson(res, status, {
         authenticated: false,
         premium: false,
         error: error?.message || 'Spotify account verification failed.',
@@ -266,7 +272,6 @@ async function handleRequest(req, res) {
       isrc: url.searchParams.get('isrc') || '',
       title: url.searchParams.get('title') || '',
       artist: url.searchParams.get('artist') || '',
-      spotifyPreviewUrl: url.searchParams.get('spotifyPreviewUrl') || '',
       durationMs: Number(url.searchParams.get('durationMs')) || 30000,
     }
     if (!track.title || !track.artist || !track.trackId) {

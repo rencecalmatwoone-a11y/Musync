@@ -10,9 +10,10 @@ import SongReveal from './SongReveal.js'
 import FriendLobby from './FriendLobby.js'
 import AuthPanel from './AuthPanel.js'
 import Difficulty from './Difficulty.js'
+import RoundLoadingScreen from './RoundLoadingScreen.js'
 import SpotifyPlaybackModal from './SpotifyPlaybackModal.js'
 import useTrackAudio, { useSpotifyPlayback } from '../hooks/useTrackAudio.js'
-import { spotifyLoginUrl, spotifySessionHeaders } from '../spotify/client.js'
+import { spotifyLoginUrl, getSpotifyAuthStatus } from '../spotify/client.js'
 
 function MusyncLogoIcon() {
   return html`
@@ -42,6 +43,7 @@ export default function MultiplayerDashboard({
   onDisplayNameChange,
   displayName,
   startInPractice = false,
+  onPracticeLaunchHandled,
 }) {
   const [showSettings, setShowSettings] = useState(false)
   const [showAuth, setShowAuth] = useState(false)
@@ -61,6 +63,8 @@ export default function MultiplayerDashboard({
       isPracticeRef.current = true
       if (onPracticeStateChange) onPracticeStateChange(true)
       setScreen('practice')
+      setTransport('local')
+      onPracticeLaunchHandled?.()
     }
   }, [startInPractice])
 
@@ -81,8 +85,7 @@ export default function MultiplayerDashboard({
   }
 
   useEffect(() => {
-    fetch('/api/spotify/status', { headers: spotifySessionHeaders() })
-      .then((response) => response.json())
+    getSpotifyAuthStatus()
       .then((status) => setSpotifyAuthed(Boolean(status.authed)))
       .catch(() => setSpotifyAuthed(false))
   }, [])
@@ -118,6 +121,11 @@ export default function MultiplayerDashboard({
     updateSettings,
     resetToLobby,
   } = game
+
+  useEffect(() => () => {
+    resetToLobby()
+    onPracticeStateChange?.(false)
+  }, [resetToLobby, onPracticeStateChange])
 
   const gap = you && players[1] ? you.score - players[1].score : 0
 
@@ -166,6 +174,11 @@ export default function MultiplayerDashboard({
   }
 
   const openFriends = () => {
+    resetToLobby()
+    isPracticeRef.current = false
+    onPracticeStateChange?.(false)
+    setSpotifyGateState(null)
+    setTransport('online')
     if (!spotifyAuthed) {
       window.location.href = spotifyLoginUrl()
       return
@@ -204,13 +217,14 @@ export default function MultiplayerDashboard({
   }
 
   const handleStartPractice = async () => {
+    if (practiceStarting) return
     setPracticeStarting(true)
     try {
       isPracticeRef.current = true
       setSpotifyGateState(null)
       if (onPracticeStateChange) onPracticeStateChange(true)
       setTransport('local')
-      await startGame({
+      const started = await startGame({
         genre,
         era,
         difficulty: practiceDifficulty,
@@ -219,7 +233,7 @@ export default function MultiplayerDashboard({
           skill: AI_SKILL[aiDifficulty] ?? 0.65,
         },
       })
-      setScreen('menu')
+      if (started) setScreen('menu')
     } finally {
       setPracticeStarting(false)
     }
@@ -247,6 +261,26 @@ export default function MultiplayerDashboard({
   }, [onlineGame?.options])
 
   const onlineIntent = transport === 'online'
+
+  const backToMenu = () => {
+    resetToLobby()
+    isPracticeRef.current = false
+    onPracticeStateChange?.(false)
+    setScreen('menu')
+  }
+
+  if (!onlineIntent && phase === 'loading') {
+    return html`<div className="mp-dashboard mp-dashboard--loading">
+      <${RoundLoadingScreen}
+        round=${round}
+        totalRounds=${totalRounds}
+        difficulty=${practiceDifficulty}
+        practice=${isPracticeRef.current}
+        reducedMotion=${settings.reducedMotion}
+        onBack=${backToMenu}
+      />
+    </div>`
+  }
 
   if (!onlineActive && onlineIntent) {
     return html`
@@ -322,7 +356,7 @@ export default function MultiplayerDashboard({
           `}
 
           ${showAuth && html`<${AuthPanel} auth=${auth} displayName=${displayName} onClose=${() => setShowAuth(false)} onDisplayNameChange=${onDisplayNameChange} />`}
-          ${online.error && html`<p className="mp-err">${online.error}</p>`}
+          ${screen === 'friends' && online.error && html`<p className="mp-err">${online.error}</p>`}
         </div>
       `
     }
@@ -512,7 +546,7 @@ export default function MultiplayerDashboard({
 
         ${screen === 'menu' && html`
           <${MultiplayerMenu}
-            onFriends=${() => setScreen('friends')}
+            onFriends=${openFriends}
             onPractice=${() => { if (onPracticeStateChange) onPracticeStateChange(true); setScreen('practice') }}
           />
         `}
@@ -544,6 +578,7 @@ export default function MultiplayerDashboard({
             onStart=${handleStartPractice}
           />
         `}
+        ${feedback && html`<p className="mp-err" role="alert">${feedback}</p>`}
       </div>
     `
   }
@@ -571,7 +606,7 @@ export default function MultiplayerDashboard({
           avgSpeed=${avgSpeed}
           totalRounds=${totalRounds}
           onPlayAgain=${handlePlayAgain}
-          onBackToLobby=${() => { resetToLobby(); setScreen('menu') }}
+          onBackToLobby=${backToMenu}
         />
         ${showLeave && html`
           <${LeaveModal}

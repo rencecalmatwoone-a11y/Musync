@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'https://esm.sh/react@19'
+import { useEffect, useRef, useState } from 'https://esm.sh/react@19'
 import { html } from '../html.js'
 import { DIFFICULTIES } from '../difficulty.js'
 import usePreviewAudio from '../hooks/usePreviewAudio.js'
@@ -18,21 +18,29 @@ export default function SongReveal({
 }) {
   const [showDetails, setShowDetails] = useState(false)
   const [reviewSong, setReviewSong] = useState(song)
+  const detailsRequestRef = useRef(null)
   const audio = usePreviewAudio()
   const prefs = audio.attach
 
   useEffect(() => {
     setReviewSong(song)
+    setShowDetails(false)
+    detailsRequestRef.current = null
+  }, [song])
+
+  useEffect(() => {
+    if (!showDetails) return undefined
     const isSpotifyTrack = song?.provider === 'spotify' || song?.source === 'spotify'
     if (!isSpotifyTrack || !song?.providerTrackId || (song.title && song.artist && song.album && song.artwork && (song.externalUrl || song.external_urls?.spotify))) return undefined
     let alive = true
-    fetchTracksByIds([song.providerTrackId], { genre: 'Spotify', difficulty: song.difficulty, source: 'song-review' })
+    if (!detailsRequestRef.current) detailsRequestRef.current = fetchTracksByIds([song.providerTrackId], { genre: 'Spotify', difficulty: song.difficulty, source: 'song-review' })
+    detailsRequestRef.current
       .then(([metadata]) => {
         if (alive && metadata) setReviewSong((current) => ({ ...current, ...metadata }))
       })
       .catch(() => {})
     return () => { alive = false }
-  }, [song])
+  }, [song, showDetails])
 
   useEffect(() => {
     if (!playbackUrl || !['spotify', 'preview'].includes(playbackType)) return undefined
@@ -40,7 +48,7 @@ export default function SongReveal({
     return () => audio.stop()
   }, [playbackUrl, playbackType, startAt])
 
-  if (!reviewSong) return html`<div className="song-reveal">Loading...</div>`
+  if (!reviewSong) return html`<div className="song-reveal" role="dialog" aria-modal="true" aria-label="Round answer">Loading...</div>`
 
   const spotifyTrackId = (reviewSong.provider === 'spotify' || reviewSong.source === 'spotify')
     ? (reviewSong.providerTrackId || String(reviewSong.id || ''))
@@ -53,7 +61,7 @@ export default function SongReveal({
 
   return html`
     <div className="song-reveal-backdrop">
-    <div className="song-reveal">
+    <div className="song-reveal" role="dialog" aria-modal="true" aria-label="Round answer">
       <div className="song-reveal__badge">
         <span className="song-reveal__round">IT WAS ...</span>
         <span className=${`song-reveal__points${isCorrectAnswer ? ' is-earned' : ''}`}>
@@ -72,34 +80,13 @@ export default function SongReveal({
 
         <div className="song-reveal__info">
           <p className="song-reveal__song-title">${reviewSong.title}</p>
-          <p className="song-reveal__song-artist">${reviewSong.artist} · ${reviewSong.year || reviewSong.releaseDate?.slice?.(0, 4) || 'Unknown year'}</p>
+          <p className="song-reveal__song-artist">${reviewSong.artist}</p>
           <p className=${`song-reveal__guess${userGuess ? '' : ' is-empty'}`}>
             <span className="song-reveal__guess-label">YOUR GUESS</span>
             <strong>${userGuess || 'No guess submitted'}</strong>
           </p>
-          <div className="song-reveal__meta">
-            <div className="song-reveal__meta-item">
-              <span className="song-reveal__meta-key">Album</span>
-              <span className="song-reveal__meta-val">${reviewSong.album || 'Unknown'}</span>
-            </div>
-            <div className="song-reveal__meta-item">
-              <span className="song-reveal__meta-key">Genre</span>
-              <span className="song-reveal__meta-val">${reviewSong.genre || 'Unknown'}</span>
-            </div>
-            <div className="song-reveal__meta-item">
-              <span className="song-reveal__meta-key">Difficulty</span>
-              <span className="song-reveal__meta-val">${difficulty}</span>
-            </div>
-            ${reviewSong.popularity !== null && reviewSong.popularity !== undefined && html`
-              <div className="song-reveal__meta-item">
-                <span className="song-reveal__meta-key">Popularity</span>
-                <span className="song-reveal__meta-val">${reviewSong.popularity}</span>
-              </div>
-            `}
-          </div>
-          ${reviewSong.fact && html`<p className="song-reveal__fact">${reviewSong.fact}</p>`}
           ${showDetails && html`
-            <div className="song-reveal__details">
+            <div className="song-reveal__details" id="song-reveal-details">
               <p><strong>ALBUM</strong> ${reviewSong.album}</p>
               <p><strong>YEAR</strong> ${reviewSong.year || reviewSong.releaseDate?.slice?.(0, 4) || 'Unknown'}</p>
               <p><strong>GENRE</strong> ${reviewSong.genre}</p>
@@ -116,11 +103,11 @@ export default function SongReveal({
         <button type="button" className="song-reveal__continue" onClick=${onContinue}>
           ${round >= totalRounds ? 'VIEW FINAL RESULTS →' : `NEXT ROUND${countdown !== null ? ` IN ${countdown}` : ''} →`}
         </button>
-        <button type="button" className="song-reveal__details-btn" onClick=${() => setShowDetails((value) => !value)}>
-          ${showDetails ? 'HIDE DETAILS' : 'VIEW DETAILS'}
+        <button type="button" className="song-reveal__details-btn" aria-expanded=${showDetails} aria-controls="song-reveal-details" onClick=${() => setShowDetails((value) => !value)}>
+          ${showDetails ? 'Hide Details' : 'View More Details'}
         </button>
       </div>
-          ${spotifyUrl && html`<a className="song-reveal__source" href=${spotifyUrl} target="_blank" rel="noreferrer">OPEN IN SPOTIFY ↗</a>`}
+          ${showDetails && spotifyUrl && html`<a className="song-reveal__source" href=${spotifyUrl} target="_blank" rel="noreferrer">OPEN IN SPOTIFY ↗</a>`}
     </div>
     </div>
   `
