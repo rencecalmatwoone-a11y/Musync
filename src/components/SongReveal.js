@@ -7,6 +7,7 @@ import { fetchTracksByIds } from '../spotify/client.js'
 export default function SongReveal({
   song,
   isCorrectAnswer,
+  points = 0,
   round,
   totalRounds,
   onContinue,
@@ -15,6 +16,7 @@ export default function SongReveal({
   playbackType = 'unavailable',
   startAt = 0,
   countdown = null,
+  classicMode = false,
 }) {
   const [showDetails, setShowDetails] = useState(false)
   const [reviewSong, setReviewSong] = useState(song)
@@ -54,9 +56,9 @@ export default function SongReveal({
     ? (reviewSong.providerTrackId || String(reviewSong.id || ''))
     : ''
   const spotifyUrl = reviewSong.spotifyUrl || reviewSong.externalUrl || reviewSong.external_urls?.spotify || (spotifyTrackId ? `https://open.spotify.com/track/${encodeURIComponent(spotifyTrackId)}` : '')
+  const sourceLabel = reviewSong.provider === 'deezer' ? 'OPEN IN DEEZER' : 'OPEN IN SPOTIFY'
   const initial = (reviewSong.artist || '?').charAt(0).toUpperCase()
   const artwork = reviewSong.artwork || reviewSong.image || null
-  const points = isCorrectAnswer ? 150 : 0
   const difficulty = DIFFICULTIES[reviewSong.difficulty]?.label || 'UNKNOWN'
 
   return html`
@@ -101,13 +103,13 @@ export default function SongReveal({
 
       <div className="song-reveal__actions">
         <button type="button" className="song-reveal__continue" onClick=${onContinue}>
-          ${round >= totalRounds ? 'VIEW FINAL RESULTS →' : `NEXT ROUND${countdown !== null ? ` IN ${countdown}` : ''} →`}
+          ${classicMode ? 'NEXT ROUND →' : round >= totalRounds ? 'VIEW FINAL RESULTS →' : `NEXT ROUND${countdown !== null ? ` IN ${countdown}` : ''} →`}
         </button>
         <button type="button" className="song-reveal__details-btn" aria-expanded=${showDetails} aria-controls="song-reveal-details" onClick=${() => setShowDetails((value) => !value)}>
           ${showDetails ? 'Hide Details' : 'View More Details'}
         </button>
       </div>
-          ${showDetails && spotifyUrl && html`<a className="song-reveal__source" href=${spotifyUrl} target="_blank" rel="noreferrer">OPEN IN SPOTIFY ↗</a>`}
+          ${showDetails && spotifyUrl && html`<a className="song-reveal__source" href=${spotifyUrl} target="_blank" rel="noreferrer">${sourceLabel} ↗</a>`}
     </div>
     </div>
   `

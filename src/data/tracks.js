@@ -141,6 +141,12 @@ export function selectGameTrack(tracks, recentIds = [], options = {}) {
 
   const pool = ranked
 
+  if (options.preferPopular) {
+    const selected = pool[0]
+    if (selected && options.recordSelection !== false) recordSelectedTrack(selected)
+    return selected
+  }
+
   const weights = pool.map((track) => {
     const popularity = normalizedPopularity(track, pool)
     const penalty = diversityPenalty(track, recentTrackIds, recentArtists, recentAlbums)

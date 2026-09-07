@@ -4862,10 +4862,88 @@ button:focus-visible {
   overflow-wrap: anywhere;
   padding: 8px;
 }
+
+.guess-points {
+  margin: 0 0 8px;
+  color: var(--cream-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.guess-points-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 0 auto 12px;
+  padding: 8px 16px;
+  background: linear-gradient(135deg, rgba(var(--dc-rgb), 0.18) 0%, rgba(var(--dc-rgb), 0.08) 100%);
+  border: 1.5px solid rgba(var(--dc-rgb), 0.55);
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: var(--cream);
+  backdrop-filter: blur(4px);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 4px 12px var(--dc-glow), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  width: fit-content;
+}
+
+.guess-points-badge:hover {
+  background: linear-gradient(135deg, rgba(var(--dc-rgb), 0.28) 0%, rgba(var(--dc-rgb), 0.14) 100%);
+  border-color: var(--yellow);
+  box-shadow: 0 6px 16px var(--dc-glow), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  transform: translateY(-1px);
+}
+
+.guess-points-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--yellow);
+  filter: drop-shadow(0 0 2px var(--dc-glow));
+  animation: points-pulse 2s ease-in-out infinite;
+}
+
+.guess-points-value {
+  font-size: 16px;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--yellow) 0%, var(--yellow-soft) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.guess-points-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--cream-muted);
+  letter-spacing: 1px;
+  margin-left: 2px;
+}
+
+@keyframes points-pulse {
+  0%, 100% {
+    opacity: 1;
+    filter: drop-shadow(0 0 2px var(--dc-glow));
+  }
+  50% {
+    opacity: 0.8;
+    filter: drop-shadow(0 0 6px var(--dc-glow));
+  }
+}
 .song-reveal > * { flex-shrink: 0; }
 .song-reveal__actions { flex-wrap: wrap; width: 100%; }
 .song-reveal__actions button { min-height: 44px; }
 @media (max-width: 768px) {
+  .stats-toggle { display: none; }
+  /* A desktop collapse preference must not hide mobile statistics when the
+     collapse control is absent. Preserve the preference for larger screens. */
+  .app-shell.stats-collapsed .stats-panel {
+    transform: none;
+    opacity: 1;
+    pointer-events: auto;
+  }
   .app-shell,
   .app-shell.is-multiplayer,
   .app-shell.stats-collapsed { padding-top: 70px; }

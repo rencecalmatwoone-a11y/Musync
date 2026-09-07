@@ -15,9 +15,10 @@ import SongReveal from './components/SongReveal.js'
 import { isSupabaseConfigured } from './supabase/client.js'
 import { difficultyKeyClass } from './difficulty.js'
 import useTrackAudio from './hooks/useTrackAudio.js'
-import { fetchRandomTrack, eraToYears } from './spotify/client.js'
+import { eraToYears, getSpotifyAuthStatus } from './spotify/client.js'
+import { fetchClassicTrack } from './data/classicTracks.js'
 import { resetSessionTrackHistory } from './data/tracks.js'
-import { CLASSIC_STATS_KEY, restoreClassicStats, classicStatsReducer } from './classicStats.js'
+import { createClassicStats, classicStatsReducer, classicAvailablePoints } from './classicStats.js'
 
 function buildAliases(track) {
   const title = String((track && track.title) || '').toLowerCase().trim()
@@ -49,7 +50,7 @@ export default function App() {
   const [multiplayerDifficulty, setMultiplayerDifficulty] = useState(() => loadStat('musync-multiplayer-difficulty', loadStat('musync-difficulty', 1)))
   const [multiplayerPractice, setMultiplayerPractice] = useState(false)
   const [practiceLaunchRequested, setPracticeLaunchRequested] = useState(false)
-  const [classicStats, updateClassicStats] = useReducer(classicStatsReducer, null, () => restoreClassicStats(loadStat(CLASSIC_STATS_KEY, null)))
+  const [classicStats, updateClassicStats] = useReducer(classicStatsReducer, null, createClassicStats)
   const { round, score, streak, bestStreak, correct, attempts, roundsPlayed } = classicStats
   const [displayName, setDisplayName] = useState(() =>
     loadStat('musync-name', 'Elite Listener'),
@@ -63,6 +64,23 @@ export default function App() {
   const [classicAnswerLocked, setClassicAnswerLocked] = useState(false)
   const [classicResultCorrect, setClassicResultCorrect] = useState(false)
   const [classicRevealStartAt, setClassicRevealStartAt] = useState(0)
+  const [spotifyAuthed, setSpotifyAuthed] = useState(false)
+  useEffect(() => {
+    let alive = true
+    const refreshSpotifyAuth = () => getSpotifyAuthStatus().then((status) => {
+      if (alive) setSpotifyAuthed(Boolean(status.authed))
+    })
+    refreshSpotifyAuth()
+    const handleAuthChange = (event) => {
+      if (typeof event.detail?.authed === 'boolean') setSpotifyAuthed(event.detail.authed)
+      else refreshSpotifyAuth()
+    }
+    window.addEventListener('musync:spotify-auth-changed', handleAuthChange)
+    return () => {
+      alive = false
+      window.removeEventListener('musync:spotify-auth-changed', handleAuthChange)
+    }
+  }, [])
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     if (params.has('spotify') || params.has('spotify_reason')) {
@@ -84,7 +102,7 @@ export default function App() {
   async function resolveClassicTrack(recentIds) {
     const { yearFrom, yearTo } = musicOrigin === 'OPM / Local' ? {} : eraToYears(era)
     const searchGenre = musicOrigin === 'OPM / Local' ? 'Any Genre' : genre
-    const track = await fetchRandomTrack({ genre: searchGenre, musicOrigin, yearFrom, yearTo, difficulty: classicDifficulty, recentIds, source: 'classic' })
+    const track = await fetchClassicTrack({ genre: searchGenre, musicOrigin, yearFrom, yearTo, difficulty: classicDifficulty, recentIds })
     return track ? { source: track.source, track } : null
   }
 
@@ -128,7 +146,7 @@ export default function App() {
       setClassicTrackId(null)
       setClassicPoolLoading(false)
       console.log('[Track] loading finished')
-      setClassicPoolError(error?.message || 'Spotify could not load songs.')
+      setClassicPoolError(error?.message || 'Public previews could not load songs.')
     })
     return () => {
       alive = false
@@ -156,7 +174,7 @@ export default function App() {
     } catch (error) {
       if (generation !== classicGenerationRef.current) return false
       setClassicPoolLoading(false)
-      setClassicPoolError(error?.message || 'Spotify could not load another song.')
+      setClassicPoolError(error?.message || 'Public previews could not load another song.')
       return false
     }
     if (generation !== classicGenerationRef.current) return false
@@ -198,11 +216,10 @@ export default function App() {
       localStorage.setItem('musync-mode', JSON.stringify(mode))
       localStorage.setItem('musync-classic-difficulty', JSON.stringify(classicDifficulty))
       localStorage.setItem('musync-multiplayer-difficulty', JSON.stringify(multiplayerDifficulty))
-      localStorage.setItem(CLASSIC_STATS_KEY, JSON.stringify(classicStats))
       localStorage.setItem('musync-name', JSON.stringify(displayName))
       localStorage.setItem('musync-stats-collapsed', JSON.stringify(statsCollapsed))
     } catch {}
-  }, [mode, classicDifficulty, multiplayerDifficulty, classicStats, displayName, statsCollapsed])
+  }, [mode, classicDifficulty, multiplayerDifficulty, displayName, statsCollapsed])
 
   const accuracy = useMemo(
     () => Math.round((correct / Math.max(attempts, 1)) * 100),
@@ -228,8 +245,8 @@ export default function App() {
     const hit = selectedTrack
       ? selectedTrack.id === active.id
       : aliases.some((alias) => normalizedGuess.includes(normalize(alias)))
-    const bonus = (classicDifficulty + 1) * 50 + streak * 10
-    updateClassicStats({ type: 'guess', correct: hit, points: bonus })
+    const bonus = classicAvailablePoints(classicStats, classicDifficulty)
+    updateClassicStats({ type: 'guess', correct: hit, difficulty: classicDifficulty })
 
     if (hit) {
       setFeedback(`Correct — ${active.title} · +${bonus}`)
@@ -317,6 +334,7 @@ export default function App() {
                   onEraChange=${setEra}
                   onGenreChange=${setGenre}
                   onMusicOriginChange=${setMusicOrigin}
+                  filtersDisabled=${!spotifyAuthed}
                   duration=${classicDuration}
                   trackId=${classicTrackId}
                   playbackUrl=${classicAudio.playbackUrl}
@@ -332,12 +350,14 @@ export default function App() {
                   revealActive=${classicReveal}
                   onPractice=${() => { setPracticeLaunchRequested(true); setMode('multiplayer') }}
                   onSubmit=${submitGuess}
+                  availablePoints=${classicAvailablePoints(classicStats, classicDifficulty)}
                   feedback=${feedback}
                 />
                 ${classicReveal && html`
                   <${SongReveal}
                     song=${classicTrack}
                     isCorrectAnswer=${classicResultCorrect}
+                    points=${classicStats.roundPoints}
                     userGuess=${classicUserGuess}
                     round=${round}
                     totalRounds=${10}
@@ -345,6 +365,7 @@ export default function App() {
                     playbackType=${classicAudio.playbackType}
                     startAt=${classicRevealStartAt}
                     onContinue=${advanceClassicRound}
+                    classicMode=${true}
                   />
                 `}
               `}

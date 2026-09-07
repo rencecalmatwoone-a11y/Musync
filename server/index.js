@@ -19,7 +19,7 @@ import {
   checkSpotifyAvailability,
   spotifyDiagnostics,
 } from './services/spotify.js'
-import { resolveVSAudio, searchVSAudioTracks, vsAudioDiagnostics } from './services/vsAudio.js'
+import { resolveVSAudio, searchVSAudioTracks, searchClassicDeezerTracks, vsAudioDiagnostics } from './services/vsAudio.js'
 import { sessionStore } from './services/sessionStore.js'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
@@ -219,8 +219,8 @@ async function handleRequest(req, res) {
   if (relative === '/api/spotify/status') {
     const sessionId = spotifySessionId(req)
     const status = await spotifyAuthStatus(sessionId)
-    const profile = status.authed ? await getSpotifyUserProfile(sessionId).catch(() => null) : null
-    if (status.authed && !profile) status.authed = (await spotifyAuthStatus(sessionId)).authed
+    const profile = status.authed && url.searchParams.get('profile') === '1' ? await getSpotifyUserProfile(sessionId) : null
+    if (status.authed && url.searchParams.get('profile') === '1' && !profile) status.authed = (await spotifyAuthStatus(sessionId)).authed
     sendJson(res, 200, { ...status, profile })
     return
   }
@@ -231,7 +231,7 @@ async function handleRequest(req, res) {
       const rejectedToken = authorization.startsWith('Bearer ') ? authorization.slice(7) : null
       sendJson(res, 200, await getSpotifyPlaybackCredentials(spotifySessionId(req), rejectedToken))
     } catch (error) {
-      const status = Number(error?.status) === 401 ? 401 : Number(error?.status) === 429 ? 429 : 502
+      const status = [401, 403, 429].includes(Number(error?.status)) ? Number(error.status) : 502
       if (error?.retryAfterMs) res.setHeader('Retry-After', String(Math.ceil(error.retryAfterMs / 1000)))
       sendJson(res, status, {
         error: error?.message || 'Spotify playback authentication failed.',
@@ -245,7 +245,7 @@ async function handleRequest(req, res) {
     try {
       sendJson(res, 200, await getSpotifyPlaybackEligibility(spotifySessionId(req)))
     } catch (error) {
-      const status = Number(error?.status) === 401 ? 401 : Number(error?.status) === 429 ? 429 : 502
+      const status = [401, 403, 429].includes(Number(error?.status)) ? Number(error.status) : 502
       if (error?.retryAfterMs) res.setHeader('Retry-After', String(Math.ceil(error.retryAfterMs / 1000)))
       sendJson(res, status, {
         authenticated: false,
@@ -379,6 +379,27 @@ async function handleRequest(req, res) {
     return
   }
 
+  if (relative === '/api/classic/tracks') {
+    try {
+      if ((await spotifyAuthStatus(spotifySessionId(req))).authed) {
+        sendJson(res, 409, { success: false, provider: 'spotify', error: 'Authenticated Classic must use Spotify.' })
+        return
+      }
+      const tracks = await searchClassicDeezerTracks({
+        genre: url.searchParams.get('genre') || 'Any Genre',
+        musicOrigin: url.searchParams.get('musicOrigin') || 'International',
+        yearFrom: url.searchParams.get('yearFrom') || '',
+        yearTo: url.searchParams.get('yearTo') || '',
+        difficulty: url.searchParams.get('difficulty') || '0',
+        limit: url.searchParams.get('limit') || 30,
+      })
+      sendJson(res, 200, { success: true, provider: 'deezer', tracks })
+    } catch (error) {
+      sendJson(res, 502, { success: false, provider: 'deezer', error: error?.message || 'Guest Classic catalog failed.' })
+    }
+    return
+  }
+
   if (relative === '/api/spotify/tracks') {
     const genre = url.searchParams.get('genre') || 'Any Genre'
     const musicOrigin = url.searchParams.has('musicOrigin')
@@ -396,6 +417,7 @@ async function handleRequest(req, res) {
       ? Math.min(Math.max(Math.floor(requestedOffset / 10) * 10, 0), 990)
       : 0
     try {
+      const sessionId = spotifySessionId(req)
       if (!spotifyConfigured) throw Object.assign(new Error('Spotify is not configured.'), { code: 'SPOTIFY_NOT_CONFIGURED', status: 503 })
       const tracks = await searchTracks({
         clientId: SPOTIFY_CLIENT_ID,
@@ -407,7 +429,8 @@ async function handleRequest(req, res) {
         difficulty,
         limit,
         offset,
-        sessionId: spotifySessionId(req),
+        sessionId,
+        requireUser: url.searchParams.get('mode') === 'classic',
       })
       if (tracks.length) {
         sendJson(res, 200, { success: true, provider: 'spotify', tracks: tracks.map(attachSpotifyPlayback) })
@@ -425,6 +448,25 @@ async function handleRequest(req, res) {
         : (Number(e?.status) >= 400 && Number(e?.status) < 600 ? Number(e.status) : 502)
       if (status === 429) res.setHeader('Retry-After', String(Math.ceil((e.retryAfterMs || 1500) / 1000)))
       sendJson(res, status, spotifyErrorPayload(e, 'SPOTIFY_TRACK_SEARCH_ERROR'))
+    }
+    return
+  }
+
+  if (relative === '/api/classic/guest-search') {
+    const query = url.searchParams.get('q') || ''
+    if (!query.trim()) {
+      sendJson(res, 200, { success: true, provider: 'deezer', tracks: [] })
+      return
+    }
+    try {
+      if ((await spotifyAuthStatus(spotifySessionId(req))).authed) {
+        sendJson(res, 409, { success: false, provider: 'spotify', error: 'Authenticated Classic must use Spotify.' })
+        return
+      }
+      const tracks = await searchClassicDeezerTracks({ query, limit: url.searchParams.get('limit') || 8 })
+      sendJson(res, 200, { success: true, provider: 'deezer', tracks })
+    } catch (error) {
+      sendJson(res, 502, { success: false, provider: 'deezer', error: error?.message || 'Guest catalog search failed.' })
     }
     return
   }
@@ -576,11 +618,11 @@ function startListening(portToUse) {
     }
     if (spotifyConfigured) {
       console.log(
-        `Spotify configured. Redirect URI: ${SPOTIFY_REDIRECT_URI} (add the exact callback URL to the Spotify dashboard). Login via /api/spotify/login to enable difficulty tiers.`,
+        `Optional Spotify integration configured. Redirect URI: ${SPOTIFY_REDIRECT_URI}. Classic uses public previews without Spotify login.`,
       )
     } else {
       console.warn(
-        'Spotify is not configured. Add SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET to a .env file to load playable tracks.',
+        'Optional Spotify integration is not configured. Classic remains playable through public previews.',
       )
     }
   })

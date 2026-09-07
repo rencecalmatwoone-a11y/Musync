@@ -15,6 +15,7 @@ export default function useOnlineGame({
   poolFilters,
 }) {
   const userId = user?.id
+  const [submittedPoints, setSubmittedPoints] = useState(null)
 
   const poolLoadedRef = useRef(false)
   const [poolRevision, setPoolRevision] = useState(0)
@@ -134,6 +135,7 @@ export default function useOnlineGame({
       setSelectedAnswer(optionId)
       try {
         await submitAnswer(session.id, currentRound, optionId, correct, points)
+        setSubmittedPoints({ sessionId: session.id, round: currentRound, points })
       } catch {}
     },
     [session?.id, currentRound, song, revealed, remaining, status],
@@ -164,6 +166,7 @@ export default function useOnlineGame({
     selectedAnswer,
     userGuess,
     isCorrect,
+    awardedPoints: myAnswer?.points ?? (submittedPoints?.sessionId === session?.id && submittedPoints?.round === currentRound ? submittedPoints.points : 0),
     answered: submittedRef.current || Boolean(myAnswer),
     me,
     players: roundPlayers || [],

@@ -3,6 +3,9 @@
 A music guessing game with solo play, multiplayer lobbies, Spotify integration,
 and Supabase authentication and game state.
 
+Classic plays public previews without a Spotify account. For its audio flow,
+scoring, and verification steps, see [Classic playback and scoring](docs/classic-spotify.md).
+
 ## Project structure
 
 ```text

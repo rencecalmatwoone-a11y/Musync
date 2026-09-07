@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'https://esm.sh/react@19'
 import { html } from '../html.js'
 import AudioPlayer from './AudioPlayer.js'
 import GuessInput from './GuessInput.js'
+import { searchClassicCatalog } from '../data/classicTracks.js'
 
 const ERAS = [
   'Any Era', '1950s', '1960s', '1970s', '1980s', '1990s',
@@ -109,6 +110,7 @@ function FilterCarousel({ label, options, value, onChange, disabled = false }) {
 }
 
 export default function GameArea({
+  availablePoints,
   era,
   genre,
   musicOrigin,
@@ -129,19 +131,20 @@ export default function GameArea({
   revealActive = false,
   answerLocked = false,
   onPractice = null,
+  filtersDisabled = false,
 }) {
   return html`
     <section className="game-area">
       <h2 className="headline">HOW WELL DO YOU KNOW YOUR MUSIC?</h2>
       <div className="filter-bar">
-        <${FilterCarousel} label="Songs" options=${MUSIC_ORIGINS} value=${musicOrigin} onChange=${onMusicOriginChange} />
+        <${FilterCarousel} label="Songs" options=${MUSIC_ORIGINS} value=${musicOrigin} onChange=${onMusicOriginChange} disabled=${filtersDisabled} />
         <div className="filter-bar__divider" aria-hidden="true"></div>
         <${FilterCarousel}
           label="Era"
           options=${ERAS}
           value=${era}
           onChange=${onEraChange}
-          disabled=${musicOrigin === 'OPM / Local'}
+          disabled=${filtersDisabled || musicOrigin === 'OPM / Local'}
         />
         <div className="filter-bar__divider" aria-hidden="true"></div>
         <${FilterCarousel}
@@ -149,7 +152,7 @@ export default function GameArea({
           options=${GENRES}
           value=${genre}
           onChange=${onGenreChange}
-          disabled=${musicOrigin === 'OPM / Local'}
+          disabled=${filtersDisabled || musicOrigin === 'OPM / Local'}
         />
       </div>
       <div className=${`music-origin-badge music-origin-badge--${musicOrigin === 'OPM / Local' ? 'local' : 'international'}`}>
@@ -170,7 +173,7 @@ export default function GameArea({
         revealActive=${revealActive}
         onPractice=${onPractice}
       />
-      <${GuessInput} onSubmit=${onSubmit} feedback=${feedback} disabled=${answerLocked} />
+      <${GuessInput} onSubmit=${onSubmit} feedback=${feedback} disabled=${answerLocked} search=${searchClassicCatalog} availablePoints=${availablePoints} />
     </section>
   `
 }

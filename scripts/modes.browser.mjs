@@ -154,9 +154,11 @@ async function newPage(user = 'host', mode = 'multiplayer', failure = null) {
     }
     window.__sdk = { created: 0, disconnected: 0, activated: 0 }
     window.Spotify = { Player: class {
-      constructor() { this.listeners = {}; this.number = ++window.__sdk.created; window.__sdk.player = this }
+      constructor(options) { this.options = options; this.listeners = {}; this.number = ++window.__sdk.created; window.__sdk.player = this }
       addListener(name, fn) { this.listeners[name] = fn }
       async connect() {
+        const token = await new Promise((resolve) => this.options.getOAuthToken(resolve))
+        if (token !== 'fixture') throw new Error('SDK did not receive the user playback token')
         if (failure === 'connect' && this.number === 1) {
           queueMicrotask(() => this.listeners.initialization_error({ message: 'Fixture device failure after connect' }))
           return true
@@ -182,10 +184,14 @@ async function newPage(user = 'host', mode = 'multiplayer', failure = null) {
     if (url.pathname.startsWith('/api/') || url.hostname === 'api.spotify.com') {
       requests.push(url.href)
       const reply = (data, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data) })
-      if (url.pathname === '/api/spotify/status') return reply({ configured: true, authed: true })
-      if (url.pathname === '/api/spotify/eligibility') return reply({ authenticated: true, premium: true })
+      if (url.pathname === '/api/spotify/status') return reply({ configured: true, authed: mode !== 'classic' })
+      if (url.pathname === '/api/classic/tracks') return reply({ provider: 'deezer', tracks: tracks.map((t) => ({ ...t, provider: 'deezer', source: 'deezer-classic', album: `Album ${t.id}`, artwork: '/public/favicon.svg', releaseDate: '2020-01-01', playbackType: 'preview', playbackUrl: `/api/audio-preview?url=${encodeURIComponent('https://cdn.dzcdn.net/' + t.id + '.mp3')}` })) })
+      if (url.pathname === '/api/classic/guest-search') return reply({ provider: 'deezer', tracks })
+      if (mode === 'classic' && (/spotify|catalog/.test(url.pathname) || url.hostname === 'api.spotify.com')) throw new Error('Classic requested Spotify: ' + url.pathname)
+      if (url.pathname === '/api/spotify/eligibility') throw new Error('Playback must not depend on profile eligibility')
       if (url.pathname === '/api/spotify/playback-token') return reply({ accessToken: 'fixture', expiresAt: Date.now() + 3600000 })
       if (url.pathname === '/api/spotify/tracks') {
+        if (mode === 'classic') assert.equal(url.searchParams.get('mode'), 'classic')
         if (failure === 'quota') return reply({ code: 'SPOTIFY_QUOTA_EXCEEDED', error: 'Spotify quota exceeded' }, 503)
         const offset = Number(url.searchParams.get('offset'))
         if (failure === 'slow-catalog') await new Promise((resolve) => setTimeout(resolve, 700))
@@ -276,7 +282,9 @@ try {
         expectedScore += 100 + Math.round(timeLeft / 10 * 50)
       }
     }
-    await ai.page.clock.runFor(10500)
+    // Advance the remaining round time. A fixed extra ten seconds each round
+    // accumulates reveal overshoot and can skip round nine on faster machines.
+    await ai.page.clock.runFor(await ai.page.evaluate(() => window.__game.game.timer.remaining * 1000 + 100))
     await ai.page.locator('.song-reveal').waitFor()
     assert.equal(await ai.page.evaluate(() => window.__game.game.playerAsked), round)
     assert.equal(await ai.page.evaluate(() => window.__game.game.playerCorrect), correctAnswers)
@@ -362,19 +370,35 @@ try {
 
   const classic = await newPage('classic', 'classic')
   await classic.page.waitForFunction(() => window.__game.classicTrack)
+  for (const width of [320, 375, 600, 768, 769, 820, 1024, 1440]) {
+    await classic.page.setViewportSize({ width, height: 1000 })
+    const toggle = classic.page.locator('.stats-toggle')
+    assert.equal(await toggle.isVisible(), width > 768, `Stats slide control at ${width}px`)
+    if (width > 768) {
+      await toggle.click()
+      assert.ok(await classic.page.locator('.app-shell.stats-collapsed').count())
+      await classic.page.setViewportSize({ width: 375, height: 1000 })
+      assert.equal(await toggle.isVisible(), false)
+      assert.equal(await classic.page.locator('.stats-panel').evaluate((el) => getComputedStyle(el).pointerEvents), 'auto')
+      await classic.page.setViewportSize({ width, height: 1000 })
+      assert.equal(await toggle.getAttribute('aria-label'), 'Expand stats panel')
+      await toggle.click()
+      assert.equal(await classic.page.locator('.app-shell.stats-collapsed').count(), 0)
+    }
+  }
+  await classic.page.setViewportSize({ width: 1440, height: 1000 })
   assert.equal(await classic.page.locator('.round-label').textContent(), 'Round 01')
   assert.deepEqual(await classic.page.locator('.stats-panel .stat-value').allTextContents(), ['0', '0x', '0%'])
-  await Promise.all([
-    classic.page.waitForResponse((r) => r.url().includes('api.spotify.com/v1/me/player/play')),
-    classic.page.getByRole('button', { name: /Play/ }).first().click(),
-  ])
-  await classic.page.waitForFunction(() => window.__sdk.activated > 0)
-  assert.equal(classic.requests.filter((url) => url.includes('/api/spotify/playback-token')).length, 1)
+  assert.equal(await classic.page.locator('.guess-points').textContent(), '100 PTS AVAILABLE')
+  await classic.page.getByRole('button', { name: 'Play clip', exact: true }).click()
+  await classic.page.waitForFunction(() => window.__media.length > 0)
+  assert.equal(await classic.page.evaluate(() => window.__sdk.created), 0)
   const song = await classic.page.evaluate(() => window.__game.classicTrack.title)
   const before = await classic.page.evaluate(() => window.__game.score)
   await classic.page.getByRole('textbox', { name: 'Song guess' }).fill(song)
   await classic.page.locator('.guess-input button[type=submit]').click()
   await classic.page.locator('.song-reveal').waitFor()
+  assert.equal(await classic.page.locator('.song-reveal__points').textContent().then((t) => t.trim()), await classic.page.evaluate(() => window.__game.classicStats.roundPoints ? '+' + window.__game.classicStats.roundPoints + ' PTS' : 'ROUND MISSED'))
   assert.equal(await classic.page.locator('.song-reveal__meta').count(), 0)
   assert.equal(await classic.page.locator('.song-reveal__details').count(), 0)
   await classic.page.getByRole('button', { name: 'View More Details', exact: true }).click()
@@ -394,9 +418,11 @@ try {
   await classic.page.locator('.song-reveal__continue').click()
   await classic.page.waitForFunction(() => window.__game.classicStats.round === 2)
   assert.equal(await classic.page.locator('.round-label').textContent(), 'Round 02')
+  assert.equal(await classic.page.locator('.guess-points').textContent(), '110 PTS AVAILABLE')
   await classic.page.getByRole('textbox', { name: 'Song guess' }).fill('definitely not a song')
   await classic.page.locator('.guess-input button[type=submit]').click()
   assert.deepEqual(await classic.page.locator('.stats-panel .stat-value').allTextContents(), ['100', '0x', '50%'])
+  assert.equal(await classic.page.locator('.guess-points').textContent(), '100 PTS AVAILABLE')
   const secondSong = await classic.page.evaluate(() => window.__game.classicTrack.title)
   await classic.page.getByRole('textbox', { name: 'Song guess' }).fill(secondSong)
   await classic.page.locator('.guess-input button[type=submit]').click()
@@ -421,7 +447,8 @@ try {
   await classic.page.waitForFunction(() => window.__game.classicStats.round === 4)
   await classic.page.getByRole('button', { name: 'Statistics', exact: true }).click()
   assert.deepEqual(await classic.page.locator('.stats-grid strong').allTextContents(), ['200', '1x', '50%', '3'])
-  assert.ok(!classic.requests.some((url) => /vs-audio|audio-preview/.test(url)))
+  assert.ok(classic.requests.some((url) => /vs-audio-preview/.test(url)))
+  assert.ok(!classic.requests.some((url) => /playback-token|eligibility|spotify\/tracks|catalog\/search|api.spotify.com/.test(url)))
   await classic.page.getByRole('button', { name: 'Game', exact: true }).click()
   await classic.page.waitForFunction(() => window.__game.classicTrack)
   await classic.page.getByRole('button', { name: 'Next songs', exact: true }).click()
@@ -437,8 +464,8 @@ try {
     await classic.page.getByRole('button', { name: 'Close navigation menu', exact: true }).click()
     await classic.page.evaluate(() => window.scrollTo(0, 0))
   }
-  console.log('PASS: Classic activates Spotify on a user gesture and reuses one playback token; responsive details, fixed mobile menu and category carousel transitions')
-  console.log('PASS: Classic starts at round 1 with zero stats despite legacy demo values, advances 1/2/3/4 including a skipped song, updates score/streak/accuracy and Statistics/Profile, restores earned totals after reload; no Deezer')
+  console.log('PASS: logged-out Classic uses public audio without Spotify requests; responsive details, fixed mobile menu and category carousel transitions')
+  console.log('PASS: Classic starts at round 1 with zero stats despite legacy demo values, advances 1/2/3/4 including a skipped song, updates score/streak/accuracy and Statistics/Profile, restores earned totals after reload; dynamic awarded points')
   await classic.context.close()
   assert.deepEqual(errors, [])
   }

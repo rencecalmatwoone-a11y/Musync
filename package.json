@@ -14,7 +14,9 @@
     "test:deployment": "node --test scripts/deployment.test.mjs",
     "test:audio": "node --test scripts/vs-audio.test.mjs scripts/audio-routes.test.mjs scripts/preview-client.test.mjs",
     "test:stats": "node --test scripts/classic-stats.test.mjs",
+    "test:classic": "node --test scripts/classic-stats.test.mjs scripts/classic-public.test.mjs",
     "test:origin": "node --test scripts/origin.test.mjs",
+    "test:spotify": "node --test scripts/spotify-auth.test.mjs",
     "test:browser": "node scripts/modes.browser.mjs",
     "test": "node scripts/verify-global-track-selection.mjs",
     "check:selection": "node scripts/selection-diversity-check.mjs"

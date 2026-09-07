@@ -2,7 +2,7 @@ import { useEffect, useState } from 'https://esm.sh/react@19'
 import { html } from '../html.js'
 import { searchCatalog } from '../spotify/client.js'
 
-export default function GuessInput({ onSubmit, feedback, disabled = false }) {
+export default function GuessInput({ onSubmit, feedback, disabled = false, search = searchCatalog, availablePoints }) {
   const [value, setValue] = useState('')
   const [suggestions, setSuggestions] = useState([])
   const [selected, setSelected] = useState(null)
@@ -34,7 +34,7 @@ export default function GuessInput({ onSubmit, feedback, disabled = false }) {
     const timeout = setTimeout(async () => {
       setSearching(true)
       try {
-        const results = await searchCatalog(value)
+        const results = await search(value)
         if (alive) setSuggestions(results)
       } catch (error) {
         if (alive) {
@@ -51,7 +51,7 @@ export default function GuessInput({ onSubmit, feedback, disabled = false }) {
       alive = false
       clearTimeout(timeout)
     }
-  }, [value, selected, disabled])
+  }, [value, selected, disabled, search])
 
   function choose(song) {
     setSelected(song)
@@ -61,6 +61,15 @@ export default function GuessInput({ onSubmit, feedback, disabled = false }) {
 
   return html`
     <form className="guess-input" onSubmit=${submit}>
+      ${availablePoints !== undefined && html`
+        <div className="guess-points-badge" aria-live="polite">
+          <svg class="guess-points-icon" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+          </svg>
+          <span class="guess-points-value">${availablePoints}</span>
+          <span class="guess-points-label">PTS</span>
+        </div>
+      `}
       <div className="guess-row">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
           <circle cx="11" cy="11" r="6.5" />

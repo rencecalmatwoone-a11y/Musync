@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createClassicStats, restoreClassicStats, classicStatsReducer as reduce } from '../src/classicStats.js'
+import { createClassicStats, restoreClassicStats, classicAvailablePoints, classicStatsReducer as reduce } from '../src/classicStats.js'
 
 test('fresh and invalid statistics start at round one with no sample values', () => {
   const initial = createClassicStats()
-  assert.deepEqual(initial, { round: 1, score: 0, streak: 0, bestStreak: 0, correct: 0, attempts: 0, roundsPlayed: 0, roundAttempts: 0, roundComplete: false })
+  assert.deepEqual(initial, { round: 1, score: 0, streak: 0, bestStreak: 0, correct: 0, attempts: 0, roundsPlayed: 0, roundAttempts: 0, roundComplete: false, roundPoints: 0 })
   for (const saved of [null, {}, { ...initial, score: -10 }, { ...initial, correct: 3 }]) assert.deepEqual(restoreClassicStats(saved), initial)
 })
 
@@ -62,4 +62,27 @@ test('reload retains earned totals and moves a completed round to the next song'
   assert.equal(restored.bestStreak, 1)
   assert.equal(restored.roundComplete, false)
   assert.equal(restoreClassicStats(restored).round, 2)
+})
+
+test('displayed available points equal the atomic award across difficulty, streak, misses and round transitions', () => {
+  let state = createClassicStats()
+  for (const difficulty of [0, 1, 2, 3, 1]) {
+    const available = classicAvailablePoints(state, difficulty)
+    const scored = reduce(state, { type: 'guess', correct: true, difficulty })
+    assert.equal(scored.score - state.score, available)
+    assert.equal(scored.roundPoints, available)
+    assert.equal(classicAvailablePoints(scored, difficulty), 0)
+    // Pop-up reopens/details changes read the settled award, not a new
+    // calculation using the now-incremented streak or a new difficulty.
+    assert.equal(scored.roundPoints, available)
+    state = reduce(scored, { type: 'advance' })
+    assert.equal(state.roundPoints, 0)
+  }
+  state = reduce(state, { type: 'guess', correct: false, difficulty: 2 })
+  assert.equal(classicAvailablePoints(state, 2), 150)
+  assert.equal(state.roundPoints, 0)
+  state = reduce(state, { type: 'miss' })
+  assert.equal(state.roundPoints, 0)
+  state = reduce(state, { type: 'advance' })
+  assert.equal(classicAvailablePoints(state, 0), 50)
 })

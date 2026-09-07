@@ -1,7 +1,7 @@
 import { html } from '../html.js'
 import { createPortal } from 'https://esm.sh/react-dom@19'
 
-export default function SpotifyPlaybackModal({ state, onRetry, onBack, onLogin, onPractice }) {
+export default function SpotifyPlaybackModal({ state, error, onRetry, onBack, onLogin, onPractice }) {
   if (!state) return null
   const connecting = state === 'connecting'
   const premium = state === 'premium-required'
@@ -20,7 +20,7 @@ export default function SpotifyPlaybackModal({ state, onRetry, onBack, onLogin, 
             : quota
             ? 'Spotify cannot be used at the moment because the development quota has been reached. Please try again later.'
             : failed
-            ? "We couldn't start Spotify playback. Please make sure Spotify is open/available and try again."
+            ? (error || "We couldn't start Spotify playback. Please try again.")
             : login
             ? 'Connect your Spotify Premium account to play Musync.'
             : 'Preparing your Spotify player...'}

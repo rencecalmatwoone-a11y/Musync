@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from 'https://esm.sh/react@19'
 import { html } from '../html.js'
+import usePreviewAudio from '../hooks/usePreviewAudio.js'
 import { useSpotifyPlayback } from '../hooks/useTrackAudio.js'
-import SpotifyPlaybackModal from './SpotifyPlaybackModal.js'
-import { hasSpotifyPlayIntent, getSpotifyAuthStatus } from '../spotify/client.js'
 
 const SIZE = 196
 const STROKE = 7
@@ -43,54 +42,16 @@ export default function AudioPlayer({
   onPractice = null,
 }) {
   const [playing, setPlaying] = useState(false)
-  const [audioStarted, setAudioStarted] = useState(false)
   const [elapsed, setElapsed] = useState(0)
-  const spotify = useSpotifyPlayback(false)
-  const [modalState, setModalState] = useState(null)
-  // Prepare the existing authenticated device so activateElement can run
-  // synchronously on the next Play gesture, before any network awaits.
+  const audio = usePreviewAudio()
+  const spotify = useSpotifyPlayback(playbackType === 'spotify-sdk')
+  const playAttempt = useRef(0)
   useEffect(() => {
-    let active = true
-    getSpotifyAuthStatus().then((status) => {
-      if (active && status.authed) spotify.ensureReady().catch(() => {})
-    })
-    return () => { active = false }
-  }, [])
-  useEffect(() => {
-    if (spotify.status === 'autoplay-blocked' || revealActive) setPlaying(false)
-  }, [spotify.status, revealActive])
-  useEffect(() => {
-    const intent = hasSpotifyPlayIntent()
-    if (!intent || !trackId) return undefined
-    setModalState('connecting')
-    let active = true
-    spotify.ensureReady().then(() => {
-      if (!active) return
-      try { localStorage.removeItem('musync-spotify-play-intent') } catch {}
-      setModalState(null)
-      setPlaying(true)
-    }).catch((error) => { if (active) setModalState(error.code === 'SPOTIFY_PREMIUM_REQUIRED' ? 'premium-required' : error.code === 'SPOTIFY_LOGIN_REQUIRED' ? 'login-required' : error.code === 'SPOTIFY_QUOTA_EXCEEDED' || /quota/i.test(error.message) ? 'quota-exceeded' : 'error') })
-    return () => { active = false }
-  }, [trackId])
-  useEffect(() => {
-    setAudioStarted(false)
-    if (!trackId || !playing) return undefined
-    let active = true
-    let requested = false
-    // A discarded effect (including Strict Mode replay) issues no playback call.
-    Promise.resolve().then(async () => {
-      if (!active) return
-      requested = true
-      const started = await spotify.playTrack(trackId, { classic: true, positionMs: baseElapsed.current * 1000 })
-      if (!active) return
-      setAudioStarted(started)
-      if (!started) setPlaying(false)
-    })
-    return () => {
-      active = false
-      if (requested) spotify.pause()
-    }
-  }, [playing, trackId])
+    if (!playing || revealActive) audio.pause()
+    if ((!playing || revealActive) && playbackType === 'spotify-sdk') spotify.pause()
+    if (revealActive) { playAttempt.current++; setPlaying(false) }
+  }, [playing, revealActive, playbackType, audio.pause, spotify.pause])
+  useEffect(() => () => { playAttempt.current++; audio.stop() }, [audio.stop])
   const startedAt = useRef(null)
   const baseElapsed = useRef(0)
   const target = useRef(STAGES[0])
@@ -98,7 +59,7 @@ export default function AudioPlayer({
   const atBoundary = elapsed >= duration || STAGES.includes(elapsed)
 
   useEffect(() => {
-    if (!playing || !audioStarted) return undefined
+    if (!playing) return undefined
 
     startedAt.current = performance.now()
     const tick = (now) => {
@@ -116,52 +77,40 @@ export default function AudioPlayer({
 
     frame.current = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(frame.current)
-  }, [playing, audioStarted])
+  }, [playing])
 
   useEffect(() => {
     if (onPlaybackPositionChange) onPlaybackPositionChange(elapsed)
   }, [elapsed, onPlaybackPositionChange])
 
   async function toggle() {
-    if (!trackId || audioLoading || revealActive) return
-    spotify.activateElement()
+    if (!trackId || !playbackUrl || audioLoading || revealActive) return
+    const attempt = ++playAttempt.current
     if (playing) {
       baseElapsed.current = elapsed
+      if (playbackType === 'spotify-sdk') spotify.pause()
+      else audio.pause()
       setPlaying(false)
-      return
-    }
-    if (!spotify.ready) {
-      if (audioError && /quota/i.test(audioError)) {
-        setModalState('quota-exceeded')
-        return
-      }
-      setModalState(spotify.status === 'login-required' ? 'login-required' : spotify.status === 'premium-required' ? 'premium-required' : 'connecting')
-      try {
-        await spotify.ensureReady()
-      } catch (error) {
-        setModalState(error.code === 'SPOTIFY_LOGIN_REQUIRED' ? 'login-required' : error.code === 'SPOTIFY_PREMIUM_REQUIRED' ? 'premium-required' : error.code === 'SPOTIFY_QUOTA_EXCEEDED' || /quota/i.test(error.message) ? 'quota-exceeded' : 'error')
-        return
-      }
-      setModalState(null)
-      spotify.activateElement()
-    }
-    if (!trackId) {
-      setModalState('error')
       return
     }
     if (atBoundary) {
       const index = stageIndex(elapsed)
       baseElapsed.current = stageStart(index)
-      target.current = STAGES[index]
+      target.current = Math.min(STAGES[index], duration)
       setElapsed(baseElapsed.current)
-      setPlaying(true)
-      return
-    }
-    baseElapsed.current = elapsed
-    setPlaying(true)
+    } else baseElapsed.current = elapsed
+    // Call play in the click gesture; only start the clip timer after the
+    // existing public audio hook confirms that media playback succeeded.
+    const started = playbackType === 'spotify-sdk'
+      ? await spotify.playTrack(trackId, { classic: true, positionMs: baseElapsed.current * 1000 })
+      : await audio.playFrom(playbackUrl, baseElapsed.current)
+    if (attempt === playAttempt.current) setPlaying(started)
   }
 
   function skip() {
+    playAttempt.current++
+    if (playbackType === 'spotify-sdk') spotify.pause()
+    else audio.pause()
     if (elapsed >= duration) {
       setPlaying(false)
       if (onSkip) onSkip()
@@ -175,24 +124,14 @@ export default function AudioPlayer({
   }
 
   const offset = CIRCUMFERENCE - (elapsed / duration) * CIRCUMFERENCE
-  const playable = spotify.ready
-  const playbackMessage =
-    revealActive
-      ? ''
-      : (audioLoading
-      ? 'Loading track...'
-      : (audioError || spotify.error || (!playable
-        ? (spotify.status === 'login-required'
-          ? 'Spotify login required.'
-          : spotify.status === 'premium-required'
-          ? 'Spotify Premium is required.'
-          : spotify.status === 'connecting'
-          ? 'Connecting to Spotify...'
-          : 'No playable audio available.')
-        : '')))
+  const playable = Boolean(trackId && (playbackType === 'spotify-sdk' || (playbackUrl && playbackType === 'preview')))
+  const playbackError = playbackType === 'spotify-sdk' ? spotify.error : audioError || audio.error
+  const playbackMessage = revealActive ? '' : audioLoading ? 'Loading track...'
+    : playbackError || (!playable ? 'No playable audio available.' : '')
 
   return html`
     <div className="audio-player">
+      <audio ref=${audio.attach} src=${playbackUrl || undefined} preload="auto" onEnded=${() => setPlaying(false)} onError=${() => setPlaying(false)} style=${{ display: 'none' }} />
       <div className="player-ring">
         <svg viewBox=${`0 0 ${SIZE} ${SIZE}`} aria-hidden="true">
           <circle className="track" cx=${SIZE / 2} cy=${SIZE / 2} r=${RADIUS} />
@@ -241,13 +180,7 @@ export default function AudioPlayer({
       >
         SKIP
       </button>
-      <${SpotifyPlaybackModal}
-        state=${modalState}
-        onLogin=${() => { try { localStorage.setItem('musync-spotify-play-intent', '1') } catch {} }}
-        onPractice=${onPractice}
-        onRetry=${toggle}
-        onBack=${() => setModalState(null)}
-      />
+
     </div>
   `
 }

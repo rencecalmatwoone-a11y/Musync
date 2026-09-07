@@ -22,8 +22,19 @@ const trackSearchCache = new Map()
 const trackSearchRequests = new Map()
 const trackLookupCache = new Map()
 const trackLookupRequests = new Map()
+const forbiddenResponses = new Map()
 const artistGenreCache = new Map()
 const artistGenreRequests = new Map()
+const SPOTIFY_GENRE_VALUES = new Map([
+  ['pop', 'pop'],
+  ['rock', 'rock'],
+  ['hip-hop', 'hip-hop'],
+  ['r&b', 'r-n-b'],
+  ['electronic', 'electronic'],
+  ['latin', 'latin'],
+  ['country', 'country'],
+  ['opm / local', 'philippines-opm'],
+])
 const REQUEST_TIMEOUT_MS = 15000
 let spotifyBackoffUntil = 0
 let accountsBackoffUntil = 0
@@ -58,12 +69,16 @@ function quotaExceededError() {
 
 async function spotifyApiError(response, label) {
   const reason = await spotifyErrorReason(response)
-  const error = new Error(`${label}: Spotify returned HTTP ${response.status}.`)
+  const error = new Error(`${label}: ${reason || `Spotify returned HTTP ${response.status}.`}`)
   error.status = response.status
   error.spotifyReason = reason || null
   error.authenticationFailed = response.status === 401
   error.quotaExceeded = response.status === 403 && String(reason).toUpperCase() === 'QUOTA_EXCEEDED'
   if (error.quotaExceeded) error.code = 'SPOTIFY_QUOTA_EXCEEDED'
+  else if (response.status === 403) {
+    error.code = /user is not registered/i.test(reason) ? 'SPOTIFY_USER_NOT_ALLOWLISTED'
+      : /scope/i.test(reason) ? 'SPOTIFY_SCOPE_REQUIRED' : 'SPOTIFY_FORBIDDEN'
+  }
   return error
 }
 
@@ -79,7 +94,14 @@ function sleep(delayMs) {
 
 async function spotifyErrorReason(response) {
   try {
-    return (await response.clone().json())?.error?.reason || ''
+    const body = await response.clone().text()
+    try {
+      const data = JSON.parse(body)
+      return String(data?.error?.reason || data?.error?.message || data?.error_description || data?.error || '').slice(0, 600)
+    } catch {
+      // Allowlist denials are plain text, not Spotify's usual JSON errors.
+      return body.replace(/[\r\n\t]+/g, ' ').slice(0, 600)
+    }
   } catch {
     return ''
   }
@@ -163,6 +185,9 @@ function getUserToken(sessionId, rejectedToken = null) {
   const request = (async () => {
     const userSession = await getUserSession(sessionId)
     if (!userSession || !userSession.accessToken) return null
+    if (userSession.clientId && userSession.clientId !== process.env.SPOTIFY_CLIENT_ID) {
+      throw Object.assign(new Error('The Spotify app configuration changed. Reconnect Spotify.'), { status: 401, code: 'SPOTIFY_LOGIN_REQUIRED' })
+    }
     if (userSession.expiresAt > Date.now() + TOKEN_EXPIRY_MARGIN_MS && userSession.accessToken !== rejectedToken) {
       if (process.env.SPOTIFY_DEBUG === '1') console.log('[Spotify] Token cache hit user (reused; no refresh)')
       return userSession.accessToken
@@ -207,6 +232,7 @@ function getUserToken(sessionId, rejectedToken = null) {
     userSession.accessToken = data.access_token
     if (data.refresh_token) userSession.refreshToken = data.refresh_token
     userSession.expiresAt = Date.now() + (data.expires_in || 3600) * 1000
+    if (typeof data.scope === 'string') userSession.scope = data.scope
     await sessionStore.set('spotify', sessionId, userSession)
     if (cancelledTokenRequests.has(request)) {
       await sessionStore.delete('spotify', sessionId)
@@ -256,19 +282,35 @@ async function getClientCredentialsToken({ clientId, clientSecret }) {
   }
 }
 
-async function effectiveToken({ clientId, clientSecret }, sessionId) {
+async function effectiveToken({ clientId, clientSecret }, sessionId, requireUser = false) {
+  const hadSession = await isUserAuthed(sessionId)
   const user = await getUserToken(sessionId)
   if (user) return { token: user, userAuthorized: true }
+  if (requireUser || hadSession) {
+    throw Object.assign(new Error('Spotify login is required. Connect Spotify to load Classic songs.'), { status: 401, code: 'SPOTIFY_LOGIN_REQUIRED' })
+  }
   return { token: await getClientCredentialsToken({ clientId, clientSecret }), userAuthorized: false }
 }
 
-async function fetchSpotifyApi(url, credentials, purpose, sessionId) {
-  const { token, userAuthorized } = await effectiveToken(credentials, sessionId)
+async function fetchSpotifyApi(url, credentials, purpose, sessionId, requireUser = false) {
+  const { token, userAuthorized } = await effectiveToken(credentials, sessionId, requireUser)
+  const denialKey = `${sessionId || 'app'}:${new URL(url).pathname}`
+  const denied = forbiddenResponses.get(denialKey)
+  if (denied?.expiresAt > Date.now()) return denied.response.clone()
+  forbiddenResponses.delete(denialKey)
+  const rememberDenial = (response) => {
+    if (response.status === 403) {
+      for (const [key, entry] of forbiddenResponses) if (entry.expiresAt <= Date.now()) forbiddenResponses.delete(key)
+      if (forbiddenResponses.size >= 200) forbiddenResponses.delete(forbiddenResponses.keys().next().value)
+      forbiddenResponses.set(denialKey, { response: response.clone(), expiresAt: Date.now() + 60000 })
+    }
+    return response
+  }
   let response = await fetchSpotify(url, {
     purpose,
     headers: { Authorization: `Bearer ${token}` },
   })
-  if (response.status !== 401) return response
+  if (response.status !== 401) return rememberDenial(response)
 
   console.warn(`[Spotify] 401 Unauthorized during ${purpose}; refreshing token once`)
   if (!userAuthorized && ccTokenCache?.token === token) ccTokenCache = null
@@ -276,10 +318,10 @@ async function fetchSpotifyApi(url, credentials, purpose, sessionId) {
     ? await getUserToken(sessionId, token)
     : await getClientCredentialsToken(credentials)
   if (!refreshed) return response
-  return fetchSpotify(url, {
+  return rememberDenial(await fetchSpotify(url, {
     purpose,
     headers: { Authorization: `Bearer ${refreshed}` },
-  })
+  }))
 }
 
 export function buildAuthorizeUrl({ clientId, redirectUri, scope, state }) {
@@ -300,6 +342,7 @@ export async function exchangeCode({ clientId, clientSecret, code, redirectUri }
   sp.set('code', code)
   sp.set('redirect_uri', redirectUri)
   const res = await fetchSpotify(ACCOUNTS_URL, {
+    purpose: 'token-authorization-code',
     method: 'POST',
     headers: {
       Authorization: `Basic ${basic}`,
@@ -315,6 +358,8 @@ export async function exchangeCode({ clientId, clientSecret, code, redirectUri }
     accessToken: data.access_token,
     refreshToken: data.refresh_token || null,
     expiresAt: Date.now() + (data.expires_in || 3600) * 1000,
+    scope: typeof data.scope === 'string' ? data.scope : null,
+    clientId,
   })
   return sessionId
 }
@@ -323,6 +368,7 @@ export async function clearUserSession(sessionId) {
   const pending = userTokenRequests.get(sessionId)
   if (pending) cancelledTokenRequests.add(pending)
   accountCache.delete(sessionId)
+  for (const key of forbiddenResponses.keys()) if (key.startsWith(`${sessionId}:`)) forbiddenResponses.delete(key)
   await sessionStore.delete('spotify', sessionId)
 }
 
@@ -341,7 +387,7 @@ async function getSpotifyAccount(sessionId) {
     const cached = accountCache.get(sessionId)
     if (cached && cached.expiresAt > Date.now()) return cached.account
     const getAccount = (accessToken) => fetchSpotify(`${API_URL}/me`, {
-      purpose: 'account-profile-and-eligibility',
+      purpose: 'account-profile',
       headers: { Authorization: `Bearer ${accessToken}` },
     })
     let response = await getAccount(token)
@@ -382,7 +428,17 @@ export async function getSpotifyUserProfile(sessionId) {
 
 export async function getSpotifyPlaybackToken(sessionId, rejectedToken = null) {
   const token = await getUserToken(sessionId, rejectedToken)
-  if (token) return token
+  if (token) {
+    const session = await getUserSession(sessionId)
+    if (typeof session?.scope === 'string') {
+      const granted = new Set(session.scope.split(/\s+/))
+      const required = ['streaming', 'user-read-private', 'user-read-email', 'user-modify-playback-state', 'user-read-playback-state']
+      if (required.some((scope) => !granted.has(scope))) {
+        throw Object.assign(new Error('Reconnect Spotify to grant the required playback permissions.'), { status: 403, code: 'SPOTIFY_SCOPE_REQUIRED' })
+      }
+    }
+    return token
+  }
   const error = new Error('Spotify login is required for playback.')
   error.status = 401
   error.code = 'SPOTIFY_LOGIN_REQUIRED'
@@ -396,14 +452,10 @@ export async function getSpotifyPlaybackCredentials(sessionId, rejectedToken = n
 }
 
 export async function getSpotifyPlaybackEligibility(sessionId) {
-  const account = await getSpotifyAccount(sessionId)
-  if (!account) {
-    const error = new Error('Spotify login is required for playback.')
-    error.status = 401
-    error.code = 'SPOTIFY_LOGIN_REQUIRED'
-    throw error
-  }
-  return { authenticated: true, premium: account.product === 'premium' }
+  await getSpotifyPlaybackToken(sessionId)
+  // New Development Mode profiles omit product. Only the SDK/player can
+  // establish playback eligibility; a stored login does not establish Premium.
+  return { authenticated: true, premium: null }
 }
 
 export async function checkSpotifyAvailability({ clientId, clientSecret }) {
@@ -458,6 +510,11 @@ function decodeYear(year) {
   return Number.isFinite(y) ? y : null
 }
 
+function spotifyGenreValue(genre) {
+  const value = String(genre || '').trim()
+  return SPOTIFY_GENRE_VALUES.get(value.toLowerCase()) || value.toLowerCase()
+}
+
 function normalizeTrack(track, genre, difficulty) {
   const artist = (track.artists || []).map((item) => item.name).join(', ')
   const album = track.album?.name || ''
@@ -499,24 +556,24 @@ function hasArtistGenres(track) {
     (artistGenreCache.get(artist.id) || []).some((genre) => genre && genre !== 'Unknown'))
 }
 
-async function resolveArtistGenres(tracks, credentials, sessionId) {
+async function resolveArtistGenres(tracks, credentials, sessionId, requireUser = false) {
   const ids = Array.from(new Set(tracks.flatMap((track) => (track.artists || []).map((artist) => artist.id)).filter(Boolean)))
   const missing = ids.filter((id) => !artistGenreCache.has(id))
-  for (let offset = 0; offset < missing.length; offset += 50) {
-    const batch = missing.slice(offset, offset + 50)
-    const requestKey = batch.join(',')
+  for (const id of missing) {
+    const requestKey = `${sessionId || 'app'}:${requireUser}:${id}`
     let request = artistGenreRequests.get(requestKey)
     if (!request) {
       request = (async () => {
         try {
-          const response = await fetchSpotifyApi(`${API_URL}/artists?ids=${encodeURIComponent(requestKey)}`, credentials, 'artist-genres', sessionId)
+          const response = await fetchSpotifyApi(`${API_URL}/artists/${encodeURIComponent(id)}`, credentials, 'artist-genres', sessionId, requireUser)
           if (response.ok) {
-            const data = await response.json()
-            for (const artist of data.artists || []) {
-              artistGenreCache.set(artist.id, artist.genres?.length ? artist.genres : ['Unknown'])
-            }
+            const artist = await response.json()
+            artistGenreCache.set(id, artist.genres?.length ? artist.genres : ['Unknown'])
+          } else {
+            throw await spotifyApiError(response, 'Spotify origin metadata failed')
           }
-        } catch {
+        } catch (error) {
+          if ([401, 403, 429].includes(error.status)) throw error
           // Missing metadata stays unclassified and can be retried later.
         } finally {
           artistGenreRequests.delete(requestKey)
@@ -555,7 +612,11 @@ export async function searchTracks({
   limit = 50,
   offset = 0,
   sessionId,
+  requireUser = false,
 }) {
+  // Check before serving a cached pool: expired/missing Classic sessions must
+  // never silently switch to app credentials or another user's market results.
+  if (requireUser) await getSpotifyPlaybackToken(sessionId)
   musicOrigin = musicOrigin === 'Any' ? 'Any' : /^(opm|opm\s*\/\s*local)$/i.test(String(musicOrigin).trim()) ? 'OPM' : 'International'
   const cacheKey = JSON.stringify({
     genre: String(genre || 'Any Genre').trim(),
@@ -563,9 +624,10 @@ export async function searchTracks({
     yearFrom: decodeYear(yearFrom),
     yearTo: decodeYear(yearTo),
     difficulty: Number(difficulty) || 0,
-    limit: Math.min(Math.max(Number(limit) || 50, 1), 50),
+    limit: Math.min(Math.max(Number(limit) || 10, 1), 10),
     offset: Math.min(Math.max(Math.floor(Number(offset) || 0), 0), 990),
-    userAuthorized: await isUserAuthed(sessionId),
+    sessionId: sessionId || null,
+    requireUser,
   })
   const cached = trackSearchCache.get(cacheKey)
   if (cached && cached.expiresAt > Date.now()) {
@@ -585,49 +647,32 @@ export async function searchTracks({
       ? ` year:${yFrom !== null ? yFrom : 1900}-${yTo !== null ? yTo : 2030}`
       : '')
     const genreQuery = musicOrigin === 'OPM'
-      ? ''
-      : (genre && genre !== 'Any Genre' ? `genre:${String(genre).trim()}` : '')
-    const originQuery = musicOrigin === 'OPM' ? 'genre:opm' : ''
+      ? `genre:${spotifyGenreValue('OPM / Local')}`
+      : (genre && genre !== 'Any Genre' ? `genre:${spotifyGenreValue(genre)}` : '')
+    const originQuery = ''
     const q = `${originQuery} ${genreQuery}${yearQuery}`.trim() || 'a'
-    const pageLimit = Math.min(Math.max(Number(limit) || 50, 1), 50)
+    const pageLimit = Math.min(Math.max(Number(limit) || 10, 1), 10)
     const pageOffset = Math.min(Math.max(Math.floor(Number(offset) || 0), 0), 990)
     const sp = new URLSearchParams({ type: 'track', limit: String(pageLimit), offset: String(pageOffset), market: 'US', q })
-    let usedFallback = false
-    let res = await fetchSpotifyApi(`${API_URL}/search?${sp.toString()}`, { clientId, clientSecret }, 'search', sessionId)
-    if (!res.ok && res.status === 400 && genreQuery && musicOrigin !== 'OPM') {
-      const fallback = new URLSearchParams(sp)
-      fallback.set('q', yearQuery.trim() || 'a')
-      res = await fetchSpotifyApi(`${API_URL}/search?${fallback.toString()}`, { clientId, clientSecret }, 'search-fallback', sessionId)
-      usedFallback = true
-    }
+    let res = await fetchSpotifyApi(`${API_URL}/search?${sp.toString()}`, { clientId, clientSecret }, 'search', sessionId, requireUser)
     if (!res.ok) {
       if (res.status === 429) throw rateLimitError(retryAfterMs(res))
       throw await spotifyApiError(res, 'Spotify search failed')
     }
     let data = await res.json()
     let items = (data && data.tracks && data.tracks.items) || []
-    if (!items.length && genreQuery && musicOrigin !== 'OPM' && !usedFallback) {
-      const fallback = new URLSearchParams(sp)
-      fallback.set('q', yearQuery.trim() || 'a')
-      res = await fetchSpotifyApi(`${API_URL}/search?${fallback.toString()}`, { clientId, clientSecret }, 'search-empty-fallback', sessionId)
-      if (!res.ok) {
-        if (res.status === 429) throw rateLimitError(retryAfterMs(res))
-        throw await spotifyApiError(res, 'Spotify search failed')
-      }
-      data = await res.json()
-      items = (data && data.tracks && data.tracks.items) || []
-    }
     const candidates = items.filter((track) => {
-      if (!track || !track.id) return false
+      if (!track || !track.id || track.is_playable === false || track.is_local || track.restrictions?.reason) return false
       const year = track.album?.release_date ? Number(track.album.release_date.slice(0, 4)) : null
       return !(yFrom !== null && (year === null || year < yFrom)) && !(yTo !== null && (year === null || year > yTo))
     })
-    const genreResolved = await resolveArtistGenres(candidates, { clientId, clientSecret }, sessionId)
+    const genreResolved = musicOrigin === 'Any' ? candidates
+      : await resolveArtistGenres(candidates, { clientId, clientSecret }, sessionId, requireUser)
     // Resolve raw artist IDs before normalization. Unknown origins are never
     // silently treated as international, including search fallback results.
     const originTracks = genreResolved.filter((track) => musicOrigin === 'Any' || (musicOrigin === 'OPM'
-      ? isOpmTrack(track)
-      : hasArtistGenres(track) && !isOpmTrack(track)))
+      ? isOpmTrack(track) || (requireUser && !hasArtistGenres(track))
+      : !hasArtistGenres(track) ? requireUser : !isOpmTrack(track)))
       .map((track) => normalizeTrack(track, genre, difficulty))
     const resolved = await Promise.all(originTracks.map(withPlayablePreview))
     const tracks = resolved.slice(0, pageLimit)
@@ -642,7 +687,7 @@ export async function getTracksByIds({ clientId, clientSecret, ids = [], genre =
   const cleanIds = Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)))
     .slice(0, 50)
   if (!cleanIds.length) return []
-  const cacheKey = JSON.stringify({ ids: cleanIds, genre, difficulty })
+  const cacheKey = JSON.stringify({ ids: cleanIds, genre, difficulty, sessionId: sessionId || null })
   const cached = trackLookupCache.get(cacheKey)
   if (cached && cached.expiresAt > Date.now()) {
     console.log('[Spotify] Track lookup cache hit')
@@ -653,23 +698,20 @@ export async function getTracksByIds({ clientId, clientSecret, ids = [], genre =
     return trackLookupRequests.get(cacheKey)
   }
   const request = (async () => {
-    const queryIds = cleanIds.join(',')
-    const res = await fetchSpotifyApi(`${API_URL}/tracks?ids=${encodeURIComponent(queryIds)}&market=US`, { clientId, clientSecret }, 'track-lookup', sessionId)
-  if (!res.ok) {
-    if (res.status === 429) throw rateLimitError(retryAfterMs(res))
-    throw await spotifyApiError(res, 'Spotify track lookup failed')
-  }
-  const data = await res.json()
-  const found = Array.isArray(data?.tracks)
-    ? await resolveArtistGenres(data.tracks.filter((track) => track && track.id), { clientId, clientSecret }, sessionId)
-      .then((tracks) => tracks.map((track) => normalizeTrack(track, genre, difficulty)))
-    : []
-  const tracks = cleanIds
-    .map((id) => found.find((track) => track.providerTrackId === id || track.id === id))
-    .filter(Boolean)
-  const enriched = await Promise.all(tracks.map(withPlayablePreview))
-  trackLookupCache.set(cacheKey, { tracks: enriched, expiresAt: Date.now() + AUDIO_CACHE_TTL_MS })
-  return enriched
+    const found = []
+    for (const id of cleanIds) {
+      const res = await fetchSpotifyApi(`${API_URL}/tracks/${encodeURIComponent(id)}?market=US`, { clientId, clientSecret }, 'track-lookup', sessionId)
+      if (res.status === 404) continue
+      if (!res.ok) throw await spotifyApiError(res, 'Spotify track lookup failed')
+      const track = await res.json()
+      if (track?.id && track.is_playable !== false && !track.is_local && !track.restrictions?.reason) found.push(normalizeTrack(track, genre, difficulty))
+    }
+    const tracks = cleanIds
+      .map((id) => found.find((track) => track.providerTrackId === id || track.id === id))
+      .filter(Boolean)
+    const enriched = await Promise.all(tracks.map(withPlayablePreview))
+    trackLookupCache.set(cacheKey, { tracks: enriched, expiresAt: Date.now() + AUDIO_CACHE_TTL_MS })
+    return enriched
   })()
   trackLookupRequests.set(cacheKey, request)
   try {
@@ -696,6 +738,6 @@ export async function searchCatalog({ clientId, clientSecret, query, limit = 8, 
   const data = await res.json()
   const items = ((data && data.tracks && data.tracks.items) || [])
     .filter((track) => track && track.id)
-  const resolved = await resolveArtistGenres(items, { clientId, clientSecret }, sessionId)
-  return resolved.map((track) => normalizeTrack(track, null, 0))
+  // Answer suggestions need titles and artists, not genre enrichment.
+  return items.map((track) => normalizeTrack(track, null, 0))
 }

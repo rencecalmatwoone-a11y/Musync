@@ -395,6 +395,7 @@ export default function MultiplayerDashboard({
             <${SongReveal}
               song=${og.song}
               isCorrectAnswer=${og.isCorrect}
+              points=${og.awardedPoints}
               userGuess=${og.userGuess}
               round=${og.currentRound}
               totalRounds=${og.totalRounds}
@@ -643,6 +644,7 @@ export default function MultiplayerDashboard({
         <${SongReveal}
           song=${correctSong}
           isCorrectAnswer=${isCorrectAnswer}
+          points=${game.youState.pendingPoints || 0}
             userGuess=${userGuess}
           round=${round}
           totalRounds=${totalRounds}
@@ -832,7 +834,7 @@ function MultiplayerMenu({ onFriends, onPractice }) {
 
         <button type="button" className="mp-card mp-card--ai" onClick=${onPractice}>
           <div className="mp-card__icon" aria-hidden="true">
-            <span>🤖</span>
+            <span>AI</span>
           </div>
           <div className="mp-card__body">
             <h2 className="mp-card__title">PRACTICE VS AI</h2>

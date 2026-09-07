@@ -151,6 +151,7 @@ export function clearSpotifyClientSession() {
     localStorage.removeItem('musync-spotify-play-intent')
   } catch {}
   for (const cache of [authStatusCache, authStatusRequests, trackCache, trackErrorCache, trackRequests, catalogCache, catalogErrorCache, catalogRequests]) cache.clear()
+  window.dispatchEvent(new CustomEvent('musync:spotify-auth-changed', { detail: { authed: false } }))
 }
 
 export async function fetchTracks({
@@ -170,7 +171,7 @@ export async function fetchTracks({
   const requestedLimit = Math.min(Math.max(Number(limit) || 10, 1), 120)
   const effectiveOffset = Number.isFinite(offset) ? offset : 0
   const requestedOffset = Math.max(Math.floor(effectiveOffset / 10) * 10, 0)
-  const cacheKey = JSON.stringify([getTabSessionId(), trackCacheKey({ genre, musicOrigin, yearFrom, yearTo, difficulty, limit: requestedLimit, offset: requestedOffset }), allowPartial, timeoutMs])
+  const cacheKey = JSON.stringify([getTabSessionId(), source === 'classic', trackCacheKey({ genre, musicOrigin, yearFrom, yearTo, difficulty, limit: requestedLimit, offset: requestedOffset }), allowPartial, timeoutMs])
   const cached = trackCache.get(cacheKey)
   if (cached && (cached.expiresAt > Date.now() || (reusePool && cached.tracks.length))) {
     trackLog('fetchTracks', source, 'cache-hit', { query: { genre, yearFrom, yearTo, difficulty }, requestId: nextRequestId() })
@@ -191,6 +192,7 @@ export async function fetchTracks({
   trackLog('fetchTracks', source, 'request-start', { query: { genre, yearFrom, yearTo, difficulty }, requestId })
 
   const sp = new URLSearchParams()
+  if (source === 'classic') sp.set('mode', 'classic')
   if (genre && genre !== 'Any Genre') sp.set('genre', genre)
   if (musicOrigin) sp.set('musicOrigin', musicOrigin)
   if (yearFrom) sp.set('yearFrom', String(yearFrom))
@@ -213,7 +215,7 @@ export async function fetchTracks({
       try {
         result = await fetchJson(`/api/spotify/tracks?${pageParams.toString()}`, { timeoutMs })
       } catch (error) {
-        if (!allowPartial || !tracks.length) throw error
+        if (!allowPartial || !tracks.length || [401, 403].includes(error.status)) throw error
         break
       }
       const { res, data } = result
@@ -276,10 +278,10 @@ export async function fetchTracksByIds(ids, { genre = 'Spotify', difficulty = 0,
   }
 }
 
-export async function fetchRandomTrack({ genre, musicOrigin, yearFrom, yearTo, difficulty, recentIds = [] , source = 'unknown' } = {}) {
+export async function fetchRandomTrack({ genre, musicOrigin, yearFrom, yearTo, difficulty, recentIds = [] , source = 'unknown', preferPopular = false } = {}) {
   const classic = source === 'classic'
   const tracks = await fetchTracks({ genre, musicOrigin, yearFrom, yearTo, difficulty, limit: classic ? 30 : 120, source, reusePool: classic, allowPartial: classic })
-  return selectGameTrack(tracks, recentIds)
+  return selectGameTrack(tracks, recentIds, { preferPopular })
 }
 
 export async function resolveVSAudioPreview(track) {

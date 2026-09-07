@@ -38,8 +38,6 @@ const playback = {
   tokenRequest: null,
   tokenFailure: null,
   rejectedToken: null,
-  eligibility: null,
-  eligibilityRequest: null,
   initializationError: null,
   generation: 0,
   playRequest: null,
@@ -74,8 +72,6 @@ export async function disconnectSpotifyPlayback() {
   playback.tokenRequest = null
   playback.tokenFailure = null
   playback.rejectedToken = null
-  playback.eligibility = null
-  playback.eligibilityRequest = null
   playback.initializationError = null
   playback.playRequest = null
   playback.pauseRequest = null
@@ -139,37 +135,6 @@ async function fetchPlaybackToken(rejectedToken = playback.rejectedToken) {
   return promise
 }
 
-async function fetchPlaybackEligibility() {
-  const headers = spotifySessionHeaders()
-  const session = headers['X-Musync-Spotify-Session'] || ''
-  if (playback.eligibility?.session === session && playback.eligibility.expiresAt > Date.now()) return playback.eligibility.data
-  if (playback.eligibilityRequest?.session === session) return playback.eligibilityRequest.promise
-  const generation = playback.generation
-  const promise = (async () => {
-    const response = await fetch('/api/spotify/eligibility', { headers, signal: AbortSignal.timeout(15000) })
-    const data = await response.json().catch(() => ({}))
-    if (!response.ok || !data.authenticated) {
-      const error = new Error(data.error || 'Spotify login is required for playback.')
-      error.code = data.code || (response.status === 401 ? 'SPOTIFY_LOGIN_REQUIRED' : 'SPOTIFY_PLAYBACK_AUTH_ERROR')
-      error.status = response.status
-      error.retryAfterMs = (Number(response.headers.get('retry-after')) || Number(data.retryAfter) || 0) * 1000
-      throw error
-    }
-    if (!data.premium) {
-      const error = new Error('Spotify Premium is required to play Musync.')
-      error.code = 'SPOTIFY_PREMIUM_REQUIRED'
-      throw error
-    }
-    if (generation !== playback.generation) throw new Error('Spotify connection cancelled.')
-    playback.eligibility = { session, data, expiresAt: Date.now() + 60000 }
-    return data
-  })().finally(() => {
-    if (playback.eligibilityRequest?.promise === promise) playback.eligibilityRequest = null
-  })
-  playback.eligibilityRequest = { session, promise }
-  return promise
-}
-
 function loadSpotifySdk() {
   if (window.Spotify?.Player) return Promise.resolve()
   if (playback.sdkLoading) return playback.sdkLoading
@@ -218,7 +183,6 @@ async function initializeSpotifyPlayer() {
     // SDK errors may arrive while connect() is still pending.
     ready.catch(() => {})
     try {
-      await fetchPlaybackEligibility()
       await Promise.all([fetchPlaybackToken(), loadSpotifySdk()])
       if (generation !== playback.generation) throw new Error('Spotify connection cancelled.')
       player = new window.Spotify.Player({
@@ -256,15 +220,14 @@ async function initializeSpotifyPlayer() {
         playback.connectionReady = false
         playback.rejectedToken = sdkToken || playback.token
         if (playback.token === playback.rejectedToken) playback.tokenExpiresAt = 0
-        playback.eligibility = null
         const error = new Error(`Spotify authentication failed: ${message}`)
         publishPlayback({ status: 'error', error: error.message })
         if (playback.readyReject) playback.readyReject(error)
       })
       listen('account_error', () => {
         playback.connectionReady = false
-        playback.eligibility = null
         const error = new Error('Spotify playback requires an eligible Premium account.')
+        error.code = 'SPOTIFY_PREMIUM_REQUIRED'
         publishPlayback({ status: 'error', error: error.message })
         if (playback.readyReject) playback.readyReject(error)
       })
@@ -299,7 +262,7 @@ async function initializeSpotifyPlayer() {
         ? { error, until: Date.now() + Math.max(1000, error.retryAfterMs || (error.code === 'SPOTIFY_QUOTA_EXCEEDED' ? 300000 : 1000)) }
         : null
       publishPlayback({
-        status: error.code === 'SPOTIFY_LOGIN_REQUIRED' ? 'login-required' : error.code === 'SPOTIFY_PREMIUM_REQUIRED' ? 'premium-required' : 'error',
+        status: ['SPOTIFY_LOGIN_REQUIRED', 'SPOTIFY_SCOPE_REQUIRED'].includes(error.code) ? 'login-required' : error.code === 'SPOTIFY_PREMIUM_REQUIRED' ? 'premium-required' : 'error',
         error: error.message,
       })
       throw error
@@ -331,12 +294,14 @@ async function spotifyPlaybackRequest(path, options = {}) {
   if (response.status === 401) response = await makeRequest(await fetchPlaybackToken(token))
   if (response.status === 429) playback.retryAt = Date.now() + Math.max(1000, (Number(response.headers.get('retry-after')) || 1) * 1000)
   if (!response.ok) {
-    const detail = await response.json().catch(() => ({}))
+    const body = await response.text()
+    let detail
+    try { detail = JSON.parse(body) } catch { detail = { error: { message: body.slice(0, 600) } } }
     const quotaExceeded = String(detail?.error?.reason || '').toUpperCase() === 'QUOTA_EXCEEDED'
     const error = new Error(quotaExceeded
       ? 'Spotify quota is temporarily exceeded. Please wait before retrying playback.'
       : response.status === 403
-      ? 'Spotify playback requires an eligible Premium account.'
+      ? `Spotify denied playback: ${detail?.error?.message || detail?.error?.reason || 'check the app user allowlist and playback permissions.'}`
       : `Spotify playback request failed (${response.status}).`)
     error.status = response.status
     if (quotaExceeded) {
@@ -346,7 +311,6 @@ async function spotifyPlaybackRequest(path, options = {}) {
     if (response.status === 401) {
       playback.rejectedToken = playback.token
       playback.tokenExpiresAt = 0
-      playback.eligibility = null
       error.code = 'SPOTIFY_LOGIN_REQUIRED'
     }
     throw error
