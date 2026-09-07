@@ -65,7 +65,7 @@ export default function MultiplayerDashboard({
   const spotify = useSpotifyPlayback(false)
   const [transport, setTransport] = useState('online')
   const isPracticeRef = useRef(false)
-  const emailAuthed = auth.status === 'authenticated' && Boolean(auth.user?.email) && !auth.user?.is_anonymous
+  const emailAuthed = auth.status === 'authenticated' && Boolean(auth.user?.email) && !auth.user?.is_anonymous && !auth.recovering
 
   useEffect(() => {
     if (startInPractice) {
@@ -91,7 +91,7 @@ export default function MultiplayerDashboard({
   }
 
   useEffect(() => {
-    if (!friendsRequested || auth.status === 'loading') return
+    if (!friendsRequested || auth.status === 'loading' || auth.recovering) return
     if (!emailAuthed) {
       setShowAuth(true)
       return
@@ -107,7 +107,7 @@ export default function MultiplayerDashboard({
     setSpotifyGateState(null)
     setFriendsRequested(false)
     try { sessionStorage.removeItem('musync-friends-intent') } catch {}
-  }, [friendsRequested, auth.status, emailAuthed, spotifyAuthed])
+  }, [friendsRequested, auth.status, auth.recovering, emailAuthed, spotifyAuthed])
 
   useEffect(() => {
     if (screen === 'friends' && (!emailAuthed || spotifyAuthed === false)) {

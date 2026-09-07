@@ -87,7 +87,14 @@ const client = {
       authListener?.('SIGNED_IN', session());
       return { data: { user, session: session() }, error: null };
     },
-    signUp: async () => ({ data: { user, session: null }, error: null }),
+    signUp: async ({ password }) => {
+      window.__testSignupCalls = (window.__testSignupCalls || 0) + 1;
+      if (password === 'email-limited') {
+        await new Promise((resolve) => { window.__releaseSignup = resolve });
+        return { data: {}, error: { code: 'over_email_send_rate_limit', message: 'email rate limit exceeded' } };
+      }
+      return { data: { user, session: null }, error: null };
+    },
     signOut: async () => { localStorage.setItem('test-email-session', 'signed_out'); authListener?.('SIGNED_OUT', null); return { error: null } },
   },
   rpc: (name, args) => request({ name, args }),
@@ -321,6 +328,24 @@ try {
     assert.equal(await invalid.page.locator('.friend-lobby, .spotify-modal').count(), 0, 'Closing sign-in cancels pending friends entry');
     console.log('PASS: invalid credentials and unconfirmed accounts cannot enter; closing email sign-in cancels entry');
     await invalid.context.close();
+
+    const limited = await newPage('email-limit', 'multiplayer', null, { emailSession: 'signed_out', spotifyAuthed: true });
+    await openFriends(limited.page);
+    await limited.page.locator('.auth-modal input[type="email"]').fill('player@example.test');
+    await limited.page.locator('.auth-modal input[type="password"]').fill('email-limited');
+    await limited.page.getByRole('button', { name: 'CREATE ACCOUNT', exact: true }).click();
+    await limited.page.waitForFunction(() => Boolean(window.__releaseSignup));
+    assert.ok(await limited.page.locator('.auth-modal').getByRole('button', { name: 'SIGN IN', exact: true }).isDisabled());
+    assert.ok(await limited.page.getByRole('button', { name: 'CREATE ACCOUNT', exact: true }).isDisabled());
+    await limited.page.getByRole('button', { name: 'CREATE ACCOUNT', exact: true }).evaluate((button) => button.click());
+    assert.equal(await limited.page.evaluate(() => window.__testSignupCalls), 1);
+    await limited.page.evaluate(() => window.__releaseSignup());
+    await limited.page.getByRole('alert').filter({ hasText: 'Confirmation emails are temporarily limited' }).waitFor();
+    assert.equal(await limited.page.locator('.friend-lobby, .spotify-modal').count(), 0);
+    await signIn(limited.page);
+    await limited.page.getByRole('button', { name: /CREATE A NEW LOBBY/ }).waitFor();
+    console.log('PASS: pending signup blocks duplicate submissions; email-limit message is actionable; existing-account sign-in still works');
+    await limited.context.close();
 
     let resolveStatus;
     const statusGate = new Promise((resolve) => { resolveStatus = resolve });

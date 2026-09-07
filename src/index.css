@@ -4222,6 +4222,16 @@ button:focus-visible {
   color: var(--cream);
   border-color: var(--border-soft);
 }
+.auth-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.auth-actions .auth-btn {
+  min-width: 0;
+  white-space: nowrap;
+  font-size: 11px;
+}
 .auth-error {
   color: var(--crimson) !important;
   font-size: 12px;

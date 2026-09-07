@@ -13,8 +13,8 @@ export default function AuthPanel({ auth, displayName, onClose, onAuthenticated,
   useEffect(() => {
     const wasAuthenticated = previousAuthenticated.current
     previousAuthenticated.current = authenticated
-    if (!wasAuthenticated && authenticated) (onAuthenticated || onClose)()
-  }, [authenticated, onAuthenticated, onClose])
+    if (!wasAuthenticated && authenticated && !auth.recovering) (onAuthenticated || onClose)()
+  }, [authenticated, auth.recovering, onAuthenticated, onClose])
 
   if (!isSupabaseConfigured) {
     return html`
@@ -30,6 +30,28 @@ export default function AuthPanel({ auth, displayName, onClose, onAuthenticated,
             CLOSE
           </button>
         </div>
+      </div>
+    `
+  }
+
+  if (tab === 'forgot') {
+    return html`
+      <div className="auth-modal">
+        <section className="auth-modal__card" role="dialog" aria-modal="true" aria-labelledby="forgot-password-title">
+          <h2 id="forgot-password-title">Reset your password</h2>
+          <p>Enter your account email and we’ll send you a reset link.</p>
+          <form onSubmit=${(event) => { event.preventDefault(); auth.requestPasswordReset(email) }}>
+            <label className="auth-field">
+              EMAIL
+              <input type="email" autoComplete="email" required value=${email} onInput=${(event) => setEmail(event.target.value)} placeholder="you@example.com" />
+            </label>
+            <button type="submit" className="auth-btn" disabled=${auth.pending}>${auth.pending ? 'Sending…' : 'Send reset link'}</button>
+          </form>
+          ${auth.error && html`<p className="auth-error" role="alert">${auth.error}</p>`}
+          ${auth.notice && html`<p role="status">${auth.notice}</p>`}
+          <button type="button" className="auth-btn auth-btn--ghost" disabled=${auth.pending} onClick=${() => { auth.clearMessages(); setTab('email') }}>Back to sign in</button>
+          <button type="button" className="auth-btn auth-btn--ghost" onClick=${onClose}>Close</button>
+        </section>
       </div>
     `
   }
@@ -103,24 +125,30 @@ export default function AuthPanel({ auth, displayName, onClose, onAuthenticated,
               <button
                 type="button"
                 className="auth-btn"
+                disabled=${auth.pending}
                 onClick=${() => auth.signInWithEmail(email, password)}
               >
                 SIGN IN
               </button>
-              <button
-                type="button"
-                className="auth-btn auth-btn--ghost"
-                onClick=${() => auth.signUp(email, password, name || 'Player')}
-              >
-                CREATE ACCOUNT
-              </button>
+              <button type="button" className="auth-forgot" disabled=${auth.pending} onClick=${() => { auth.clearMessages(); setTab('forgot') }}>Forgot password?</button>
+              <div className="auth-actions">
+                <button
+                  type="button"
+                  className="auth-btn auth-btn--ghost"
+                  disabled=${auth.pending}
+                  onClick=${() => auth.signUp(email, password, name || 'Player')}
+                >
+                  CREATE ACCOUNT
+                </button>
+                <button type="button" className="auth-btn auth-btn--ghost" onClick=${onClose}>
+                  CLOSE
+                </button>
+              </div>
             `}
 
-        ${auth.error && html`<p className="auth-error">${auth.error}</p>`}
+        ${auth.pending && html`<p role="status">Please wait…</p>`}
+        ${auth.error && html`<p className="auth-error" role="alert">${auth.error}</p>`}
         ${auth.notice && html`<p role="status">${auth.notice}</p>`}
-        <button type="button" className="auth-btn auth-btn--ghost" onClick=${onClose}>
-          CLOSE
-        </button>
       </div>
     </div>
   `

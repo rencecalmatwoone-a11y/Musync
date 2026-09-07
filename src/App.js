@@ -11,6 +11,7 @@ import useOnlineLobby from './hooks/useOnlineLobby.js'
 import useOnlineGame from './hooks/useOnlineGame.js'
 import ProfilePanel from './components/ProfilePanel.js'
 import SettingsPage from './components/SettingsPage.js'
+import PasswordRecoveryModal from './components/PasswordRecoveryModal.js'
 import SongReveal from './components/SongReveal.js'
 import { isSupabaseConfigured } from './supabase/client.js'
 import { difficultyKeyClass } from './difficulty.js'
@@ -305,6 +306,7 @@ export default function App() {
 
   return html`
     <div className=${`app-shell${multiplayerMode ? ' is-multiplayer' : ''}${multiplayerPractice ? ' is-mp-practice' : ''} ${difficultyKeyClass(multiplayerMode ? multiplayerDifficulty : classicDifficulty)}${!multiplayerMode && statsCollapsed ? ' stats-collapsed' : ''}`}>
+      ${auth.recovering && html`<${PasswordRecoveryModal} auth=${auth} />`}
       <${Sidebar}
         activePage=${page}
         onNavigate=${setPage}
