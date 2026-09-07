@@ -13,7 +13,7 @@ import Difficulty from './Difficulty.js'
 import RoundLoadingScreen from './RoundLoadingScreen.js'
 import SpotifyPlaybackModal from './SpotifyPlaybackModal.js'
 import useTrackAudio, { useSpotifyPlayback } from '../hooks/useTrackAudio.js'
-import { spotifyLoginUrl, getSpotifyAuthStatus } from '../spotify/client.js'
+import { getSpotifyAuthStatus } from '../spotify/client.js'
 
 function MusyncLogoIcon() {
   return html`
@@ -58,11 +58,14 @@ export default function MultiplayerDashboard({
   const [aiDifficulty, setAiDifficulty] = useState(0)
   const [practiceStarting, setPracticeStarting] = useState(false)
   const [spotifyGateState, setSpotifyGateState] = useState(null)
-  const [spotifyAuthed, setSpotifyAuthed] = useState(false)
+  const [spotifyAuthed, setSpotifyAuthed] = useState(null)
+  const [friendsRequested, setFriendsRequested] = useState(() => {
+    try { return sessionStorage.getItem('musync-friends-intent') === '1' } catch { return false }
+  })
   const spotify = useSpotifyPlayback(false)
   const [transport, setTransport] = useState('online')
-  const wantOnlineRef = useRef(false)
   const isPracticeRef = useRef(false)
+  const emailAuthed = auth.status === 'authenticated' && Boolean(auth.user?.email) && !auth.user?.is_anonymous
 
   useEffect(() => {
     if (startInPractice) {
@@ -74,21 +77,44 @@ export default function MultiplayerDashboard({
     }
   }, [startInPractice])
 
-  useEffect(() => {
-    if (wantOnlineRef.current && onlineActive && auth.status === 'authenticated') {
-      wantOnlineRef.current = false
-      setTransport('online')
-    }
-  }, [onlineActive, auth.status])
+  const handlePlayOnline = () => openFriends()
 
-  const handlePlayOnline = () => {
-    if (auth.status === 'authenticated') {
-      setTransport('online')
-    } else {
-      wantOnlineRef.current = true
-      setShowAuth(true)
-    }
+  const cancelFriendsEntry = () => {
+    setFriendsRequested(false)
+    setShowAuth(false)
+    setSpotifyGateState(null)
+    try { sessionStorage.removeItem('musync-friends-intent') } catch {}
   }
+
+  const rememberFriendsEntry = () => {
+    try { sessionStorage.setItem('musync-friends-intent', '1') } catch {}
+  }
+
+  useEffect(() => {
+    if (!friendsRequested || auth.status === 'loading') return
+    if (!emailAuthed) {
+      setShowAuth(true)
+      return
+    }
+    setShowAuth(false)
+    if (spotifyAuthed === null) return
+    if (!spotifyAuthed) {
+      setSpotifyGateState('login-required')
+      return
+    }
+    setTransport('online')
+    setScreen('friends')
+    setSpotifyGateState(null)
+    setFriendsRequested(false)
+    try { sessionStorage.removeItem('musync-friends-intent') } catch {}
+  }, [friendsRequested, auth.status, emailAuthed, spotifyAuthed])
+
+  useEffect(() => {
+    if (screen === 'friends' && (!emailAuthed || spotifyAuthed === false)) {
+      setScreen('menu')
+      setFriendsRequested(true)
+    }
+  }, [screen, emailAuthed, spotifyAuthed])
 
   useEffect(() => {
     let alive = true
@@ -181,7 +207,7 @@ export default function MultiplayerDashboard({
   }
 
   const goToPractice = () => {
-    setSpotifyGateState(null)
+    cancelFriendsEntry()
     isPracticeRef.current = true
     if (onPracticeStateChange) onPracticeStateChange(true)
     setTransport('local')
@@ -194,15 +220,7 @@ export default function MultiplayerDashboard({
     onPracticeStateChange?.(false)
     setSpotifyGateState(null)
     setTransport('online')
-    if (!spotifyAuthed) {
-      window.location.href = spotifyLoginUrl()
-      return
-    }
-    if (auth.status !== 'authenticated' || !auth.user || auth.user.is_anonymous) {
-      setShowAuth(true)
-      return
-    }
-    setScreen('friends')
+    setFriendsRequested(true)
   }
 
   const handleStart = () => {
@@ -331,11 +349,13 @@ export default function MultiplayerDashboard({
           ${screen === 'menu' && html`
             <${MultiplayerMenu}
               onFriends=${openFriends}
-              onPractice=${() => { if (onPracticeStateChange) onPracticeStateChange(true); setTransport('local'); setScreen('practice') }}
+              onPractice=${goToPractice}
             />
           `}
 
-          ${screen === 'friends' && html`
+          ${friendsRequested && emailAuthed && spotifyAuthed === null && html`<p role="status">Checking Spotify connection…</p>`}
+
+          ${screen === 'friends' && emailAuthed && spotifyAuthed && html`
             <${FriendLobby}
               lobby=${{
                 ...online,
@@ -351,10 +371,10 @@ export default function MultiplayerDashboard({
           `}
 
           <${SpotifyPlaybackModal}
-            state=${screen === 'friends' ? spotifyGateState : null}
+            state=${emailAuthed && (screen === 'friends' || friendsRequested) ? spotifyGateState : null}
             onRetry=${() => launchMatch(online.startMatch)}
-            onBack=${() => setSpotifyGateState(null)}
-            onLogin=${() => { try { localStorage.setItem('musync-spotify-play-intent', '1') } catch {} }}
+            onBack=${cancelFriendsEntry}
+            onLogin=${rememberFriendsEntry}
             onPractice=${goToPractice}
           />
 
@@ -370,7 +390,7 @@ export default function MultiplayerDashboard({
             />
           `}
 
-          ${showAuth && html`<${AuthPanel} auth=${auth} displayName=${displayName} onClose=${() => setShowAuth(false)} onDisplayNameChange=${onDisplayNameChange} />`}
+          ${showAuth && html`<${AuthPanel} auth=${auth} displayName=${displayName} onClose=${cancelFriendsEntry} onAuthenticated=${() => setShowAuth(false)} onDisplayNameChange=${onDisplayNameChange} />`}
           ${screen === 'friends' && online.error && html`<p className="mp-err">${online.error}</p>`}
         </div>
       `
@@ -558,16 +578,16 @@ export default function MultiplayerDashboard({
             `}
           </div>
         </div>
-          ${showAuth && html`<${AuthPanel} auth=${auth} displayName=${displayName} onClose=${() => setShowAuth(false)} onDisplayNameChange=${onDisplayNameChange} />`}
+          ${showAuth && html`<${AuthPanel} auth=${auth} displayName=${displayName} onClose=${cancelFriendsEntry} onAuthenticated=${() => setShowAuth(false)} onDisplayNameChange=${onDisplayNameChange} />`}
 
         ${screen === 'menu' && html`
           <${MultiplayerMenu}
             onFriends=${openFriends}
-            onPractice=${() => { if (onPracticeStateChange) onPracticeStateChange(true); setScreen('practice') }}
+            onPractice=${goToPractice}
           />
         `}
 
-        ${screen === 'friends' && html`
+        ${screen === 'friends' && emailAuthed && spotifyAuthed && html`
           <${FriendLobby}
             lobby=${lobby}
             onStart=${handleStart}
@@ -576,10 +596,10 @@ export default function MultiplayerDashboard({
         `}
 
         <${SpotifyPlaybackModal}
-          state=${screen === 'friends' ? spotifyGateState : null}
+          state=${emailAuthed && (screen === 'friends' || friendsRequested) ? spotifyGateState : null}
           onRetry=${handleStart}
-          onBack=${() => setSpotifyGateState(null)}
-          onLogin=${() => { try { localStorage.setItem('musync-spotify-play-intent', '1') } catch {} }}
+          onBack=${cancelFriendsEntry}
+          onLogin=${rememberFriendsEntry}
           onPractice=${goToPractice}
         />
 

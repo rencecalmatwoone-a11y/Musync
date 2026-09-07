@@ -8,6 +8,7 @@ export default function useSupabaseAuth() {
   const [profile, setProfile] = useState(null)
   const [leaderboard, setLeaderboard] = useState([])
   const [error, setError] = useState(null)
+  const [notice, setNotice] = useState(null)
 
   const refreshProfile = useCallback(async (uid) => {
     try {
@@ -83,6 +84,7 @@ export default function useSupabaseAuth() {
 
   const signUp = useCallback(async (email, password, displayName) => {
     setError(null)
+    setNotice(null)
     try {
       const sb = await getSupabase()
       const { data, error } = await sb.auth.signUp({
@@ -91,8 +93,12 @@ export default function useSupabaseAuth() {
         options: { data: { display_name: displayName } },
       })
       if (error) throw error
-      setUser(data.user)
-      setStatus('authenticated')
+      if (data.session?.user) {
+        setUser(data.session.user)
+        setStatus('authenticated')
+      } else {
+        setNotice('Check your email to confirm your account, then sign in to continue.')
+      }
     } catch (e) {
       setError(e.message)
     }
@@ -100,11 +106,13 @@ export default function useSupabaseAuth() {
 
   const signInWithEmail = useCallback(async (email, password) => {
     setError(null)
+    setNotice(null)
     try {
       const sb = await getSupabase()
       const { data, error } = await sb.auth.signInWithPassword({ email, password })
       if (error) throw error
-      setUser(data.user)
+      if (!data.session?.user) throw new Error('Sign-in did not complete. Please try again.')
+      setUser(data.session.user)
       setStatus('authenticated')
     } catch (e) {
       setError(e.message)
@@ -127,6 +135,7 @@ export default function useSupabaseAuth() {
     profile,
     leaderboard,
     error,
+    notice,
     signInAnonymously,
     signUp,
     signInWithEmail,

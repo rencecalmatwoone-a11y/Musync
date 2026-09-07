@@ -1,5 +1,6 @@
 import { html } from '../html.js'
 import { createPortal } from 'https://esm.sh/react-dom@19'
+import { spotifyLoginUrl } from '../spotify/client.js'
 
 export default function SpotifyPlaybackModal({ state, error, onRetry, onBack, onLogin, onPractice }) {
   if (!state) return null
@@ -27,7 +28,7 @@ export default function SpotifyPlaybackModal({ state, error, onRetry, onBack, on
         </p>
         ${!connecting && html`
           <div className="spotify-modal__actions">
-            ${login && html`<a className="auth-btn spotify-modal__primary" href="/api/spotify/login" onClick=${onLogin}>Continue with Spotify</a>`}
+            ${login && html`<a className="auth-btn spotify-modal__primary" href=${spotifyLoginUrl()} onClick=${onLogin}>Continue with Spotify</a>`}
             ${(premium || failed || quota) && html`
               <div className="spotify-modal__button-row">
                 <button type="button" className="auth-btn spotify-modal__primary" onClick=${onRetry}>Try Again</button>

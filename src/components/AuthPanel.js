@@ -2,18 +2,19 @@ import { useState, useEffect, useRef } from 'https://esm.sh/react@19'
 import { html } from '../html.js'
 import { isSupabaseConfigured } from '../supabase/client.js'
 
-export default function AuthPanel({ auth, displayName, onClose, onDisplayNameChange }) {
+export default function AuthPanel({ auth, displayName, onClose, onAuthenticated, onDisplayNameChange }) {
   const [tab, setTab] = useState('email')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [name, setName] = useState('')
-  const previousStatus = useRef(auth.status)
+  const authenticated = auth.status === 'authenticated' && Boolean(auth.user?.email) && !auth.user?.is_anonymous
+  const previousAuthenticated = useRef(authenticated)
 
   useEffect(() => {
-    const wasAuthenticated = previousStatus.current === 'authenticated'
-    previousStatus.current = auth.status
-    if (!wasAuthenticated && auth.status === 'authenticated' && auth.user) onClose()
-  }, [auth.status, auth.user, onClose])
+    const wasAuthenticated = previousAuthenticated.current
+    previousAuthenticated.current = authenticated
+    if (!wasAuthenticated && authenticated) (onAuthenticated || onClose)()
+  }, [authenticated, onAuthenticated, onClose])
 
   if (!isSupabaseConfigured) {
     return html`
@@ -116,6 +117,7 @@ export default function AuthPanel({ auth, displayName, onClose, onDisplayNameCha
             `}
 
         ${auth.error && html`<p className="auth-error">${auth.error}</p>`}
+        ${auth.notice && html`<p role="status">${auth.notice}</p>`}
         <button type="button" className="auth-btn auth-btn--ghost" onClick=${onClose}>
           CLOSE
         </button>

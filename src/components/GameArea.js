@@ -3,14 +3,11 @@ import { html } from '../html.js'
 import AudioPlayer from './AudioPlayer.js'
 import GuessInput from './GuessInput.js'
 import { searchClassicCatalog } from '../data/classicTracks.js'
+import { GENRES } from '../data/filterOptions.js'
 
 const ERAS = [
   'Any Era', '1950s', '1960s', '1970s', '1980s', '1990s',
   '2000s', '2010s', '2020s',
-]
-const GENRES = [
-  'Any Genre', 'Pop', 'Rock', 'Hip-Hop', 'R&B', 'Electronic',
-  'Latin', 'Country',
 ]
 const MUSIC_ORIGINS = ['International', 'OPM / Local']
 

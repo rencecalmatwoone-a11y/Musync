@@ -71,9 +71,25 @@ function rpc(name, args, user) {
 }
 const clientFixture = `
 const user = { id: new URLSearchParams(location.search).get('user') || 'host', email: 'player@example.test', is_anonymous: false }
+let authListener;
+function session() {
+  const state = localStorage.getItem('test-email-session');
+  return state === 'signed_out' ? null : { user: state === 'anonymous' ? { ...user, email: undefined, is_anonymous: true } : user };
+}
 async function request(data) { return (await fetch('/test/db', { method: 'POST', body: JSON.stringify({ ...data, user: user.id }) })).json() }
 const client = {
-  auth: { getSession: async () => ({ data: { session: { user } } }), onAuthStateChange: () => ({ data: { subscription: { unsubscribe() {} } } }) },
+  auth: {
+    getSession: async () => ({ data: { session: session() } }),
+    onAuthStateChange: (callback) => { authListener = callback; return { data: { subscription: { unsubscribe() { authListener = null } } } } },
+    signInWithPassword: async ({ password }) => {
+      if (password === 'incorrect') return { data: {}, error: { message: 'Invalid login credentials' } };
+      localStorage.setItem('test-email-session', 'authenticated');
+      authListener?.('SIGNED_IN', session());
+      return { data: { user, session: session() }, error: null };
+    },
+    signUp: async () => ({ data: { user, session: null }, error: null }),
+    signOut: async () => { localStorage.setItem('test-email-session', 'signed_out'); authListener?.('SIGNED_OUT', null); return { error: null } },
+  },
   rpc: (name, args) => request({ name, args }),
   from(table) {
     const query = { table, filters: [] }
@@ -138,13 +154,14 @@ const base = `http://127.0.0.1:${server.address().port}`
 const browser = await chromium.launch({ channel: process.env.MUSYNC_BROWSER || 'chrome', headless: true })
 const cdnCache = new Map()
 const errors = []
-async function newPage(user = 'host', mode = 'multiplayer', failure = null) {
+async function newPage(user = 'host', mode = 'multiplayer', failure = null, authOptions = {}) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } })
   const page = await context.newPage()
   page.setDefaultTimeout(15000)
   const requests = []
   page.on('pageerror', (error) => errors.push(error.message))
-  await page.addInitScript(({ mode, user, failure }) => {
+  await page.addInitScript(({ mode, user, failure, initialSession }) => {
+    if (localStorage.getItem('test-email-session') === null) localStorage.setItem('test-email-session', initialSession);
     localStorage.setItem('musync-mode', JSON.stringify(mode))
     localStorage.setItem('musync-name', JSON.stringify(user))
     localStorage.setItem('musync-spotify-debug', 'off')
@@ -174,7 +191,7 @@ async function newPage(user = 'host', mode = 'multiplayer', failure = null) {
     HTMLMediaElement.prototype.play = async function () { window.__media.push(this.src); this.dispatchEvent(new Event('play')) }
     HTMLMediaElement.prototype.pause = function () {}
     HTMLMediaElement.prototype.load = function () {}
-  }, { mode, user, failure })
+  }, { mode, user, failure, initialSession: authOptions.emailSession || 'authenticated' })
   await page.route('**/*', async (route) => {
     const url = new URL(route.request().url())
     if (url.hostname === 'esm.sh') {
@@ -184,7 +201,10 @@ async function newPage(user = 'host', mode = 'multiplayer', failure = null) {
     if (url.pathname.startsWith('/api/') || url.hostname === 'api.spotify.com') {
       requests.push(url.href)
       const reply = (data, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data) })
-      if (url.pathname === '/api/spotify/status') return reply({ configured: true, authed: mode !== 'classic' })
+      if (url.pathname === '/api/spotify/status') {
+        if (authOptions.statusGate) await authOptions.statusGate;
+        return reply({ configured: true, authed: authOptions.spotifyAuthed ?? mode !== 'classic' });
+      }
       if (url.pathname === '/api/classic/tracks') return reply({ provider: 'deezer', tracks: tracks.map((t) => ({ ...t, provider: 'deezer', source: 'deezer-classic', album: `Album ${t.id}`, artwork: '/public/favicon.svg', releaseDate: '2020-01-01', playbackType: 'preview', playbackUrl: `/api/audio-preview?url=${encodeURIComponent('https://cdn.dzcdn.net/' + t.id + '.mp3')}` })) })
       if (url.pathname === '/api/classic/guest-search') return reply({ provider: 'deezer', tracks })
       if (mode === 'classic' && (/spotify|catalog/.test(url.pathname) || url.hostname === 'api.spotify.com')) throw new Error('Classic requested Spotify: ' + url.pathname)
@@ -251,7 +271,79 @@ async function layout(page) {
   await page.setViewportSize({ width: 1440, height: 1000 })
 }
 try {
-  if (process.argv.includes('--startup-only')) {
+  if (process.argv.includes('--friends-auth-only')) {
+    const openFriends = (page) => page.getByRole('button').filter({ hasText: 'PLAY WITH FRIENDS' }).click();
+    const signIn = async (page, password = 'fixture-password') => {
+      await page.locator('.auth-modal input[type="email"]').fill('player@example.test');
+      await page.locator('.auth-modal input[type="password"]').fill(password);
+      await page.locator('.auth-modal').getByRole('button', { name: 'SIGN IN', exact: true }).click();
+    };
+    for (const emailSession of ['signed_out', 'anonymous', 'authenticated']) {
+      for (const spotifyAuthed of [false, true]) {
+        const options = { emailSession, spotifyAuthed };
+        const { page, context } = await newPage('friends-auth', 'multiplayer', null, options);
+        await openFriends(page);
+        if (emailSession !== 'authenticated') {
+          await page.getByText('PLAYER SIGN IN', { exact: true }).waitFor();
+          assert.equal(await page.locator('.friend-lobby, .spotify-modal').count(), 0, 'Email sign-in must precede Spotify and the lobby');
+          await signIn(page);
+        }
+        if (!spotifyAuthed) {
+          await page.getByRole('dialog', { name: 'Connect Spotify' }).waitFor();
+          assert.equal(await page.locator('.friend-lobby, .auth-modal').count(), 0);
+          await page.route('**/api/spotify/login?**', async (route) => {
+            assert.ok(new URL(route.request().url()).searchParams.get('tab'));
+            options.spotifyAuthed = true;
+            await route.fulfill({ status: 302, headers: { location: `${base}/?spotify=auth&spotify_session=fixture-return-session` }, body: '' });
+          });
+          await page.getByRole('link', { name: 'Continue with Spotify' }).click();
+        }
+        await page.getByRole('button', { name: /CREATE A NEW LOBBY/ }).waitFor();
+        assert.equal(await page.locator('.auth-modal, .spotify-modal').count(), 0);
+        assert.equal(await page.evaluate(() => sessionStorage.getItem('musync-friends-intent')), null);
+        console.log(`PASS: friends entry with email=${emailSession}, Spotify=${spotifyAuthed}; resumes after required sign-ins`);
+        await context.close();
+      }
+    }
+
+    const invalid = await newPage('invalid-login', 'multiplayer', null, { emailSession: 'signed_out', spotifyAuthed: false });
+    await openFriends(invalid.page);
+    await signIn(invalid.page, 'incorrect');
+    await invalid.page.getByText('Invalid login credentials', { exact: true }).waitFor();
+    assert.equal(await invalid.page.locator('.friend-lobby, .spotify-modal').count(), 0);
+    await invalid.page.getByRole('button', { name: 'CREATE ACCOUNT', exact: true }).click();
+    await invalid.page.getByRole('status').filter({ hasText: 'Check your email' }).waitFor();
+    assert.equal(await invalid.page.locator('.friend-lobby, .spotify-modal').count(), 0);
+    await invalid.page.getByRole('button', { name: 'CLOSE', exact: true }).click();
+    await invalid.page.locator('.auth-chip').click();
+    await signIn(invalid.page);
+    await invalid.page.locator('.auth-modal').waitFor({ state: 'detached' });
+    assert.equal(await invalid.page.locator('.friend-lobby, .spotify-modal').count(), 0, 'Closing sign-in cancels pending friends entry');
+    console.log('PASS: invalid credentials and unconfirmed accounts cannot enter; closing email sign-in cancels entry');
+    await invalid.context.close();
+
+    let resolveStatus;
+    const statusGate = new Promise((resolve) => { resolveStatus = resolve });
+    const delayed = await newPage('delayed-status', 'multiplayer', null, { spotifyAuthed: true, statusGate });
+    await openFriends(delayed.page);
+    await delayed.page.getByRole('status').filter({ hasText: 'Checking Spotify connection' }).waitFor();
+    assert.equal(await delayed.page.locator('.friend-lobby, .spotify-modal').count(), 0);
+    resolveStatus();
+    await delayed.page.getByRole('button', { name: /CREATE A NEW LOBBY/ }).waitFor();
+    console.log('PASS: slow Spotify status waits for the existing session instead of requesting another login');
+    await delayed.context.close();
+
+    const cancelled = await newPage('cancelled-spotify', 'multiplayer', null, { spotifyAuthed: false });
+    await openFriends(cancelled.page);
+    await cancelled.page.getByRole('dialog').getByRole('button', { name: 'Back', exact: true }).click();
+    assert.equal(await cancelled.page.locator('.friend-lobby, .spotify-modal').count(), 0);
+    assert.equal(await cancelled.page.evaluate(() => sessionStorage.getItem('musync-friends-intent')), null);
+    await cancelled.page.getByRole('button').filter({ hasText: 'PRACTICE VS AI' }).click();
+    await cancelled.page.getByRole('button', { name: /START PRACTICE/ }).waitFor();
+    console.log('PASS: cancelling Spotify connection returns to menu; practice remains accessible');
+    await cancelled.context.close();
+    assert.deepEqual(errors, []);
+  } else if (process.argv.includes('--startup-only')) {
     const startup = await newPage('startup', 'multiplayer', 'missing-page')
     await practice(startup.page)
     assert.ok(Number((await startup.page.evaluate(() => window.__game.game.currentSongId)).replace('track', '')) >= 10)
@@ -305,11 +397,11 @@ try {
   console.log('PASS: VS AI 10 rounds, original answer locking/reveal/scoring/results, Deezer-only audio; layout at 10 widths')
   await ai.context.close()
 
-  const quota = await newPage('quota', 'multiplayer', 'quota')
+  const quota = await newPage('quota', 'multiplayer', 'quota', { spotifyAuthed: false })
   await practice(quota.page)
   assert.equal(await quota.page.evaluate(() => window.__game.game.correctSong.previewProvider), 'deezer')
   assert.equal(await quota.page.evaluate(() => window.__sdk.created), 0)
-  console.log('PASS: VS AI starts with Spotify quota failure using the existing catalog fallback')
+  console.log('PASS: guest VS AI starts with Spotify quota failure using the existing catalog fallback')
   await quota.context.close()
 
   const slow = await newPage('slow', 'multiplayer', 'slow-preview')
@@ -320,7 +412,7 @@ try {
   const cancelled = await newPage('cancelled', 'multiplayer', 'slow-catalog')
   await cancelled.page.getByRole('button').filter({ hasText: 'PRACTICE VS AI' }).click()
   await cancelled.page.getByRole('button', { name: /START PRACTICE/ }).click()
-  await cancelled.page.getByRole('button', { name: 'BACK TO LOBBY', exact: true }).click()
+  await cancelled.page.getByRole('button', { name: /back to lobby/i }).click()
   await cancelled.page.getByRole('button').filter({ hasText: 'PLAY WITH FRIENDS' }).click()
   await cancelled.page.getByRole('button', { name: /CREATE A NEW LOBBY/ }).waitFor()
   await cancelled.page.waitForTimeout(1000)

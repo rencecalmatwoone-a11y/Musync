@@ -1,5 +1,6 @@
 import { useState } from 'https://esm.sh/react@19'
 import { html } from '../html.js'
+import { GENRES } from '../data/filterOptions.js'
 
 export default function ProfilePanel({ name, onSaveName, profile, score, streak, bestStreak = streak, accuracy, attempts, roundsPlayed = attempts, genre, onGenreChange }) {
   const [draft, setDraft] = useState(name || '')
@@ -71,9 +72,7 @@ export default function ProfilePanel({ name, onSaveName, profile, score, streak,
             <label className="mp-field">
               <span className="mp-field__label">FAVORITE GENRE</span>
               <select className="mp-field__input" value=${genre} onChange=${(e) => onGenreChange && onGenreChange(e.target.value)}>
-                <option>Any Genre</option>
-                <option>Pop</option>
-                <option>Rock</option>
+                ${GENRES.map((option) => html`<option key=${option}>${option}</option>`)}
               </select>
             </label>
           </div>
