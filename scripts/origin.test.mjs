@@ -67,7 +67,7 @@ test('Spotify Classic maps every UI filter value into one combined Spotify query
   }
   const before = requests.length
   await search({ genre: 'Any Genre', musicOrigin: 'OPM', offset: before * 10 })
-  assert.equal(requests.at(-1).searchParams.get('q'), 'genre:philippines-opm')
+  assert.equal(requests.at(-1).searchParams.get('q'), 'genre:opm')
 })
 
 test('supported single artist requests resolve collaborators; transient failures never classify unknown songs as International', async () => {

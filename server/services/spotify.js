@@ -22,6 +22,8 @@ const trackSearchCache = new Map()
 const trackSearchRequests = new Map()
 const trackLookupCache = new Map()
 const trackLookupRequests = new Map()
+const publicPlaylistCache = new Map()
+const publicPlaylistRequests = new Map()
 const forbiddenResponses = new Map()
 const artistGenreCache = new Map()
 const artistGenreRequests = new Map()
@@ -33,7 +35,7 @@ const SPOTIFY_GENRE_VALUES = new Map([
   ['electronic', 'electronic'],
   ['latin', 'latin'],
   ['country', 'country'],
-  ['opm / local', 'philippines-opm'],
+  ['opm / local', 'opm'],
 ])
 const REQUEST_TIMEOUT_MS = 15000
 let spotifyBackoffUntil = 0
@@ -63,7 +65,7 @@ function quotaExceededError() {
   error.status = 403
   error.code = 'SPOTIFY_QUOTA_EXCEEDED'
   error.quotaExceeded = true
-  error.retryAfterMs = 5 * 60 * 1000
+  error.retryAfterMs = Math.max(1000, spotifyQuotaUntil - Date.now())
   return error
 }
 
@@ -515,11 +517,32 @@ function spotifyGenreValue(genre) {
   return SPOTIFY_GENRE_VALUES.get(value.toLowerCase()) || value.toLowerCase()
 }
 
+// Spotify genres describe artists. Match whole genre words, including common
+// subgenres, rather than stamping the requested genre onto unrelated results.
+function matchesGenre(track, genre) {
+  if (!genre || genre === 'Any Genre') return true
+  const patterns = {
+    'pop': /\bpop\b/,
+    'rock': /\b(rock|metal|punk|grunge)\b/,
+    'hip-hop': /\b(hip hop|rap|trap|drill)\b/,
+    'r&b': /\b(r b|r and b|r n b|soul|neo soul)\b/,
+    'electronic': /\b(electronic|electronica|edm|house|techno|trance|dubstep|drum and bass|dance)\b/,
+    'latin': /\b(latin|latino|reggaeton|salsa|bachata|bossa nova|samba)\b/,
+    'country': /\b(country|bluegrass|americana)\b/,
+  }
+  const normalize = (value) => String(value).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+  const pattern = patterns[String(genre).toLowerCase()]
+  return (track.resolvedGenres || []).some((value) => pattern
+    ? pattern.test(normalize(value)) : normalize(value) === normalize(genre))
+}
+
 function normalizeTrack(track, genre, difficulty) {
   const artist = (track.artists || []).map((item) => item.name).join(', ')
   const album = track.album?.name || ''
   const year = track.album?.release_date ? Number(track.album.release_date.slice(0, 4)) : null
-  const genreLabel = track.resolvedGenre || 'Unknown'
+  const genreLabel = genre && genre !== 'Any Genre'
+    ? (track.resolvedGenres || []).find((value) => matchesGenre({ resolvedGenres: [value] }, genre)) || track.resolvedGenre || 'Unknown'
+    : track.resolvedGenre || 'Unknown'
   return {
     id: track.id,
     provider: 'spotify',
@@ -547,6 +570,37 @@ function normalizeTrack(track, genre, difficulty) {
   }
 }
 
+function decodePublicHtml(value) {
+  return String(value || '')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;|&#39;/gi, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+}
+
+async function fetchPublicPlaylistPageTracks(id) {
+  const response = await fetch(`https://open.spotify.com/playlist/${encodeURIComponent(id)}`, {
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    headers: { 'User-Agent': 'Mozilla/5.0' },
+  })
+  if (!response.ok) return []
+  const html = await response.text()
+  const tracks = []
+  const rowPattern = /data-testid="track-row"[^>]*aria-label="([^"]*)"[\s\S]*?href="\/track\/([A-Za-z0-9]+)"[\s\S]*?data-testid="internal-artist-link"[^>]*>([^<]+)</g
+  for (const match of html.matchAll(rowPattern)) {
+    const [, name, idValue, artist] = match
+    tracks.push({
+      id: idValue,
+      name: decodePublicHtml(name),
+      artists: [{ name: decodePublicHtml(artist) }],
+      is_playable: true,
+      is_local: false,
+    })
+  }
+  return tracks
+}
+
 function isOpmTrack(track) {
   return (track.resolvedGenres || []).some((genre) => /(?:^|[^a-z])(?:opm|pinoy|filipino|philippine|tagalog)(?:[^a-z]|$)/i.test(String(genre)))
 }
@@ -559,7 +613,8 @@ function hasArtistGenres(track) {
 async function resolveArtistGenres(tracks, credentials, sessionId, requireUser = false) {
   const ids = Array.from(new Set(tracks.flatMap((track) => (track.artists || []).map((artist) => artist.id)).filter(Boolean)))
   const missing = ids.filter((id) => !artistGenreCache.has(id))
-  for (const id of missing) {
+  const resolveArtist = async (id) => {
+    if (artistGenreCache.has(id)) return
     const requestKey = `${sessionId || 'app'}:${requireUser}:${id}`
     let request = artistGenreRequests.get(requestKey)
     if (!request) {
@@ -583,6 +638,17 @@ async function resolveArtistGenres(tracks, credentials, sessionId, requireUser =
     }
     await request
   }
+  // Keep origin classification, without serially waiting for every artist.
+  // Stop scheduling metadata work after an auth or rate-limit failure.
+  let next = 0
+  let failure = null
+  await Promise.all(Array.from({ length: Math.min(3, missing.length) }, async () => {
+    while (!failure && next < missing.length) {
+      const id = missing[next++]
+      try { await resolveArtist(id) } catch (error) { failure ||= error }
+    }
+  }))
+  if (failure) throw failure
   return tracks.map((track) => ({
     ...track,
     resolvedGenres: (track.artists || []).flatMap((artist) => artistGenreCache.get(artist.id) || []),
@@ -613,6 +679,7 @@ export async function searchTracks({
   offset = 0,
   sessionId,
   requireUser = false,
+  includePageInfo = false,
 }) {
   // Check before serving a cached pool: expired/missing Classic sessions must
   // never silently switch to app credentials or another user's market results.
@@ -632,25 +699,24 @@ export async function searchTracks({
   const cached = trackSearchCache.get(cacheKey)
   if (cached && cached.expiresAt > Date.now()) {
     console.log('[Spotify] Search cache hit')
-    return cached.tracks
+    return includePageInfo ? cached.page : cached.page.tracks
   }
   if (trackSearchRequests.has(cacheKey)) {
     console.log('[Spotify] Search request in-flight deduplicated')
-    return trackSearchRequests.get(cacheKey)
+    const page = await trackSearchRequests.get(cacheKey)
+    return includePageInfo ? page : page.tracks
   }
   const request = (async () => {
     const yFrom = decodeYear(yearFrom)
     const yTo = decodeYear(yearTo)
-    const yearQuery = musicOrigin === 'OPM'
-      ? ''
-      : (yFrom !== null || yTo !== null
+    const yearQuery = (yFrom !== null || yTo !== null
       ? ` year:${yFrom !== null ? yFrom : 1900}-${yTo !== null ? yTo : 2030}`
       : '')
     const genreQuery = musicOrigin === 'OPM'
       ? `genre:${spotifyGenreValue('OPM / Local')}`
       : (genre && genre !== 'Any Genre' ? `genre:${spotifyGenreValue(genre)}` : '')
     const originQuery = ''
-    const q = `${originQuery} ${genreQuery}${yearQuery}`.trim() || 'a'
+    const q = `${originQuery} ${genreQuery}${yearQuery}`.trim() || `year:1950-${new Date().getUTCFullYear()}`
     const pageLimit = Math.min(Math.max(Number(limit) || 10, 1), 10)
     const pageOffset = Math.min(Math.max(Math.floor(Number(offset) || 0), 0), 990)
     const sp = new URLSearchParams({ type: 'track', limit: String(pageLimit), offset: String(pageOffset), market: 'US', q })
@@ -664,23 +730,29 @@ export async function searchTracks({
     const candidates = items.filter((track) => {
       if (!track || !track.id || track.is_playable === false || track.is_local || track.restrictions?.reason) return false
       const year = track.album?.release_date ? Number(track.album.release_date.slice(0, 4)) : null
-      return !(yFrom !== null && (year === null || year < yFrom)) && !(yTo !== null && (year === null || year > yTo))
+      return !(yFrom !== null && (!Number.isFinite(year) || year < yFrom)) && !(yTo !== null && (!Number.isFinite(year) || year > yTo))
     })
-    const genreResolved = musicOrigin === 'Any' ? candidates
+    const genreResolved = musicOrigin === 'Any' && (!genre || genre === 'Any Genre') ? candidates
       : await resolveArtistGenres(candidates, { clientId, clientSecret }, sessionId, requireUser)
     // Resolve raw artist IDs before normalization. Unknown origins are never
     // silently treated as international, including search fallback results.
-    const originTracks = genreResolved.filter((track) => musicOrigin === 'Any' || (musicOrigin === 'OPM'
-      ? isOpmTrack(track) || (requireUser && !hasArtistGenres(track))
-      : !hasArtistGenres(track) ? requireUser : !isOpmTrack(track)))
+    const originTracks = genreResolved.filter((track) => matchesGenre(track, genre)
+      && (musicOrigin === 'Any' || (musicOrigin === 'OPM'
+        ? isOpmTrack(track) : hasArtistGenres(track) && !isOpmTrack(track))))
       .map((track) => normalizeTrack(track, genre, difficulty))
     const resolved = await Promise.all(originTracks.map(withPlayablePreview))
     const tracks = resolved.slice(0, pageLimit)
-    trackSearchCache.set(cacheKey, { tracks, expiresAt: Date.now() + AUDIO_CACHE_TTL_MS })
-    return tracks
+    // Pagination follows raw search results, even when all rows were filtered out.
+    const hasMore = data.tracks?.next != null || (data.tracks?.next === undefined && items.length === pageLimit)
+    const page = { tracks, nextOffset: hasMore && pageOffset + pageLimit <= 990 ? pageOffset + pageLimit : null }
+    trackSearchCache.set(cacheKey, { page, expiresAt: Date.now() + AUDIO_CACHE_TTL_MS })
+    return page
   })()
   trackSearchRequests.set(cacheKey, request)
-  try { return await request } finally { trackSearchRequests.delete(cacheKey) }
+  try {
+    const page = await request
+    return includePageInfo ? page : page.tracks
+  } finally { trackSearchRequests.delete(cacheKey) }
 }
 
 export async function getTracksByIds({ clientId, clientSecret, ids = [], genre = 'Spotify', difficulty = 0, sessionId }) {
@@ -740,4 +812,41 @@ export async function searchCatalog({ clientId, clientSecret, query, limit = 8, 
     .filter((track) => track && track.id)
   // Answer suggestions need titles and artists, not genre enrichment.
   return items.map((track) => normalizeTrack(track, null, 0))
+}
+
+export async function getPublicPlaylistTracks({ clientId, clientSecret, playlistIds = [], limit = 1500 }) {
+  const ids = Array.from(new Set(playlistIds.map((id) => String(id || '').trim()).filter(Boolean)))
+  if (!ids.length) return []
+  const cacheKey = JSON.stringify(ids)
+  const cached = publicPlaylistCache.get(cacheKey)
+  if (cached?.expiresAt > Date.now()) return cached.tracks
+  if (publicPlaylistRequests.has(cacheKey)) return publicPlaylistRequests.get(cacheKey)
+  const request = (async () => {
+    const responses = await Promise.allSettled(ids.map(async (id) => {
+      const tracks = []
+      try {
+        for (let offset = 0; offset < 1000; offset += 100) {
+          const params = new URLSearchParams({ limit: '100', market: 'US', offset: String(offset) })
+          const response = await fetchSpotifyApi(`${API_URL}/playlists/${encodeURIComponent(id)}/tracks?${params}`, { clientId, clientSecret }, 'classic-guest-playlist')
+          if (!response.ok) throw await spotifyApiError(response, 'Spotify playlist lookup failed')
+          const data = await response.json()
+          tracks.push(...(data.items || []).map((item) => item.track).filter(Boolean))
+          if (tracks.length >= Number(data.total) || (data.items || []).length < 100) break
+        }
+      } catch {
+        return fetchPublicPlaylistPageTracks(id)
+      }
+      return tracks
+    }))
+    const tracks = [...new Map(responses
+      .filter((result) => result.status === 'fulfilled')
+      .flatMap((result) => result.value)
+      .filter((track) => track.id && track.name && track.artists?.length && track.is_playable !== false && !track.is_local)
+      .map((track) => [track.id, track])).values()]
+      .slice(0, Math.min(Math.max(Number(limit) || 1500, 1), 1500))
+    publicPlaylistCache.set(cacheKey, { tracks, expiresAt: Date.now() + 30 * 60 * 1000 })
+    return tracks
+  })().finally(() => publicPlaylistRequests.delete(cacheKey))
+  publicPlaylistRequests.set(cacheKey, request)
+  return request
 }

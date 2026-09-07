@@ -3,6 +3,7 @@ import { html } from '../html.js'
 import { DIFFICULTIES } from '../difficulty.js'
 import usePreviewAudio from '../hooks/usePreviewAudio.js'
 import { fetchTracksByIds } from '../spotify/client.js'
+import { fetchTrackTrivia } from '../music/trivia.js'
 
 export default function SongReveal({
   song,
@@ -17,9 +18,13 @@ export default function SongReveal({
   startAt = 0,
   countdown = null,
   classicMode = false,
+  nextLoading = false,
+  nextError = '',
+  nextRetryAt = null,
 }) {
   const [showDetails, setShowDetails] = useState(false)
   const [reviewSong, setReviewSong] = useState(song)
+  const [triviaText, setTriviaText] = useState(song?.fact || '')
   const detailsRequestRef = useRef(null)
   const audio = usePreviewAudio()
   const prefs = audio.attach
@@ -27,7 +32,16 @@ export default function SongReveal({
   useEffect(() => {
     setReviewSong(song)
     setShowDetails(false)
+    setTriviaText(song?.fact || '')
     detailsRequestRef.current = null
+    if (!song?.fact) {
+      let alive = true
+      fetchTrackTrivia(song).then((fact) => {
+        if (alive && fact) setTriviaText(fact)
+      })
+      return () => { alive = false }
+    }
+    return undefined
   }, [song])
 
   useEffect(() => {
@@ -60,6 +74,7 @@ export default function SongReveal({
   const initial = (reviewSong.artist || '?').charAt(0).toUpperCase()
   const artwork = reviewSong.artwork || reviewSong.image || null
   const difficulty = DIFFICULTIES[reviewSong.difficulty]?.label || 'UNKNOWN'
+  const releaseYear = reviewSong.year || reviewSong.releaseDate?.slice?.(0, 4) || ''
 
   return html`
     <div className="song-reveal-backdrop">
@@ -87,10 +102,17 @@ export default function SongReveal({
             <span className="song-reveal__guess-label">YOUR GUESS</span>
             <strong>${userGuess || 'No guess submitted'}</strong>
           </p>
+          <aside className="song-reveal__trivia" aria-label="Track trivia">
+            <div className="song-reveal__trivia-heading">
+              <span className="song-reveal__trivia-icon" aria-hidden="true">*</span>
+              <strong>TRACK TRIVIA</strong>
+            </div>
+            <p>${triviaText || 'Finding a verified fact about this track...'}</p>
+          </aside>
           ${showDetails && html`
             <div className="song-reveal__details" id="song-reveal-details">
               <p><strong>ALBUM</strong> ${reviewSong.album}</p>
-              <p><strong>YEAR</strong> ${reviewSong.year || reviewSong.releaseDate?.slice?.(0, 4) || 'Unknown'}</p>
+              <p><strong>YEAR</strong> ${releaseYear || 'Unknown'}</p>
               <p><strong>GENRE</strong> ${reviewSong.genre}</p>
               <p><strong>DIFFICULTY</strong> ${difficulty}</p>
               ${reviewSong.popularity !== null && reviewSong.popularity !== undefined && html`<p><strong>POPULARITY</strong> ${reviewSong.popularity}</p>`}
@@ -102,7 +124,9 @@ export default function SongReveal({
       </div>
 
       <div className="song-reveal__actions">
-        <button type="button" className="song-reveal__continue" onClick=${onContinue}>
+        ${nextError && html`<p className="audio-status" role="status">${nextError} ${nextRetryAt ? 'We’ll retry automatically after the cooldown.' : ''}</p>`}
+        ${nextLoading && html`<p className="audio-status" role="status">Loading the next song…</p>`}
+        <button type="button" className="song-reveal__continue" onClick=${onContinue} disabled=${nextLoading || Boolean(nextRetryAt)}>
           ${classicMode ? 'NEXT ROUND →' : round >= totalRounds ? 'VIEW FINAL RESULTS →' : `NEXT ROUND${countdown !== null ? ` IN ${countdown}` : ''} →`}
         </button>
         <button type="button" className="song-reveal__details-btn" aria-expanded=${showDetails} aria-controls="song-reveal-details" onClick=${() => setShowDetails((value) => !value)}>

@@ -25,6 +25,12 @@ function MusyncLogoIcon() {
   `
 }
 
+function timerDialStyle(timer) {
+  const duration = Math.max(1, Number(timer?.duration) || 10)
+  const remaining = Math.max(0, Math.min(duration, Number(timer?.remaining) || 0))
+  return { '--timer-angle': `${(1 - remaining / duration) * 360 - 90}deg` }
+}
+
 export default function MultiplayerDashboard({
   mode,
   onModeChange,
@@ -85,9 +91,18 @@ export default function MultiplayerDashboard({
   }
 
   useEffect(() => {
+    let alive = true
+    const handleAuthChange = (event) => {
+      if (typeof event.detail?.authed === 'boolean') setSpotifyAuthed(event.detail.authed)
+    }
+    window.addEventListener('musync:spotify-auth-changed', handleAuthChange)
     getSpotifyAuthStatus()
-      .then((status) => setSpotifyAuthed(Boolean(status.authed)))
-      .catch(() => setSpotifyAuthed(false))
+      .then((status) => { if (alive) setSpotifyAuthed(Boolean(status.authed)) })
+      .catch(() => { if (alive) setSpotifyAuthed(false) })
+    return () => {
+      alive = false
+      window.removeEventListener('musync:spotify-auth-changed', handleAuthChange)
+    }
   }, [])
 
   const {
@@ -469,10 +484,10 @@ export default function MultiplayerDashboard({
                 <span className="mp-chip">👤 ${onlinePlayers.length}/${onlinePlayers.length}</span>
                 <span className="mp-chip mp-chip--battle">⚔ BATTLE ROUND ${og.currentRound}/${og.totalRounds}</span>
               </div>
-              <div className="mp-timer">
+              <div className=${`mp-timer${og.remaining <= 3 ? ' is-urgent' : ''}`}>
                 <span>TIME REMAINING</span>
                 <strong>${og.formatted}</strong>
-                <div className="mp-timer__watch" aria-hidden="true"></div>
+                <div className="mp-timer__watch" style=${timerDialStyle(og)} aria-hidden="true"></div>
               </div>
             </div>
           </div>
@@ -694,10 +709,10 @@ export default function MultiplayerDashboard({
             <span className="mp-chip">👤 ${players.length}/${players.length}</span>
             <span className="mp-chip mp-chip--battle">⚔ BATTLE ROUND ${round}/${totalRounds}</span>
           </div>
-          <div className="mp-timer">
+          <div className=${`mp-timer${timer.remaining <= 3 ? ' is-urgent' : ''}`}>
             <span>TIME REMAINING</span>
             <strong>${timer.formatted}</strong>
-            <div className="mp-timer__watch" aria-hidden="true"></div>
+            <div className="mp-timer__watch" style=${timerDialStyle(timer)} aria-hidden="true"></div>
           </div>
         </div>
       </div>

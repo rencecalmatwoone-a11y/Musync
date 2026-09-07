@@ -9,6 +9,7 @@ import {
   searchTracks,
   getTracksByIds,
   searchCatalog,
+  getPublicPlaylistTracks,
   buildAuthorizeUrl,
   exchangeCode,
   clearUserSession,
@@ -90,6 +91,11 @@ const SPOTIFY_REDIRECT_URI =
     ? SPOTIFY_PRODUCTION_REDIRECT_URI
     : SPOTIFY_LOCAL_REDIRECT_URI)
 const SPOTIFY_SCOPE = 'user-read-private user-read-email streaming user-read-playback-state user-modify-playback-state'
+const CLASSIC_GUEST_PLAYLIST_IDS = [
+  '3QvE2COD1CW9VlaxInwL5t',
+  '1ph0jH1uDt0NBBdweWKlsP',
+  '6NUd1lcpm3ZzYN6Oe3ALId',
+]
 
 const oauthCookieName = 'musync_spotify_oauth'
 const oauthCookieOptions = `Path=/api/spotify; HttpOnly; SameSite=Lax${SPOTIFY_REDIRECT_URI.startsWith('https:') ? '; Secure' : ''}`
@@ -134,7 +140,7 @@ function spotifyErrorPayload(error, fallbackCode) {
     rateLimited: status === 429,
     quotaExceeded,
     authenticationFailed: status === 401,
-    retryAfter: status === 429 ? Math.ceil((error?.retryAfterMs || 0) / 1000) : undefined,
+    retryAfter: status === 429 || quotaExceeded ? Math.ceil((error?.retryAfterMs || 0) / 1000) : undefined,
     catalogTracksFound: Number(error?.catalogTracksFound) || 0,
     playableTracksFound: Number(error?.playableTracksFound) || 0,
   }
@@ -385,6 +391,19 @@ async function handleRequest(req, res) {
         sendJson(res, 409, { success: false, provider: 'spotify', error: 'Authenticated Classic must use Spotify.' })
         return
       }
+      let playlistTracks = []
+      if (spotifyConfigured) {
+        try {
+          playlistTracks = await getPublicPlaylistTracks({
+            clientId: SPOTIFY_CLIENT_ID,
+            clientSecret: SPOTIFY_CLIENT_SECRET,
+            playlistIds: CLASSIC_GUEST_PLAYLIST_IDS,
+            limit: 1500,
+          })
+        } catch (error) {
+          console.warn('[Classic] guest playlist lookup unavailable:', error?.message || error)
+        }
+      }
       const tracks = await searchClassicDeezerTracks({
         genre: url.searchParams.get('genre') || 'Any Genre',
         musicOrigin: url.searchParams.get('musicOrigin') || 'International',
@@ -392,6 +411,7 @@ async function handleRequest(req, res) {
         yearTo: url.searchParams.get('yearTo') || '',
         difficulty: url.searchParams.get('difficulty') || '0',
         limit: url.searchParams.get('limit') || 30,
+        playlistTracks,
       })
       sendJson(res, 200, { success: true, provider: 'deezer', tracks })
     } catch (error) {
@@ -419,7 +439,7 @@ async function handleRequest(req, res) {
     try {
       const sessionId = spotifySessionId(req)
       if (!spotifyConfigured) throw Object.assign(new Error('Spotify is not configured.'), { code: 'SPOTIFY_NOT_CONFIGURED', status: 503 })
-      const tracks = await searchTracks({
+      const { tracks, nextOffset } = await searchTracks({
         clientId: SPOTIFY_CLIENT_ID,
         clientSecret: SPOTIFY_CLIENT_SECRET,
         genre,
@@ -431,12 +451,13 @@ async function handleRequest(req, res) {
         offset,
         sessionId,
         requireUser: url.searchParams.get('mode') === 'classic',
+        includePageInfo: true,
       })
       if (tracks.length) {
-        sendJson(res, 200, { success: true, provider: 'spotify', tracks: tracks.map(attachSpotifyPlayback) })
+        sendJson(res, 200, { success: true, provider: 'spotify', tracks: tracks.map(attachSpotifyPlayback), nextOffset })
         return
       }
-      sendJson(res, 200, { success: true, provider: 'spotify', tracks: [] })
+      sendJson(res, 200, { success: true, provider: 'spotify', tracks: [], nextOffset })
     } catch (e) {
       console.warn('[spotify] track search failed', {
         status: e?.status || null,

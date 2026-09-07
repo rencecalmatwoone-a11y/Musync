@@ -11,6 +11,12 @@ export function SpotifyAccountControl() {
 
   useEffect(() => {
     let alive = true
+    const handleAuthChange = (event) => {
+      if (typeof event.detail?.authed !== 'boolean') return
+      setSpotifyAuthed(event.detail.authed)
+      setSpotifyProfile(event.detail.profile || null)
+    }
+    window.addEventListener('musync:spotify-auth-changed', handleAuthChange)
     getSpotifyAuthStatus()
       .then((status) => {
         if (alive) {
@@ -19,18 +25,24 @@ export function SpotifyAccountControl() {
         }
       })
       .catch(() => {})
-    return () => { alive = false }
+    return () => {
+      alive = false
+      window.removeEventListener('musync:spotify-auth-changed', handleAuthChange)
+    }
   }, [])
 
   async function logoutSpotify() {
     setLoggingOut(true)
     try {
-      await fetch('/api/spotify/logout', { method: 'POST', headers: spotifySessionHeaders() })
-      await disconnectSpotifyPlayback()
+      await fetch('/api/spotify/logout', { method: 'POST', headers: spotifySessionHeaders(), signal: AbortSignal.timeout(15000) })
+    } catch {
+      // Drop the tab session even when the logout request is unavailable.
+    } finally {
       clearSpotifyClientSession()
       setSpotifyAuthed(false)
-    } finally {
+      setSpotifyProfile(null)
       setLoggingOut(false)
+      await disconnectSpotifyPlayback()
     }
   }
 

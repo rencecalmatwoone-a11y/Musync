@@ -10,6 +10,7 @@ const TRACK_ERROR_TTL_MS = 60 * 1000
 const trackCache = new Map()
 const trackErrorCache = new Map()
 const trackRequests = new Map()
+const classicPools = new Map()
 const catalogCache = new Map()
 const catalogErrorCache = new Map()
 const catalogRequests = new Map()
@@ -19,6 +20,7 @@ const vsPreviewCache = new Map()
 const vsPreviewRequests = new Map()
 const TAB_SESSION_KEY = 'musync-spotify-tab-session'
 let returnedFromSpotify = false
+let clientLoggedOut = false
 
 function getTabSessionId() {
   try {
@@ -122,6 +124,8 @@ async function fetchJson(url, options = {}) {
 }
 
 export async function getSpotifyAuthStatus() {
+  const guestStatus = { configured: isSpotifyConfigured, authed: false, profile: null }
+  if (clientLoggedOut) return guestStatus
   const headers = spotifySessionHeaders()
   const session = headers['X-Musync-Spotify-Session'] || ''
   const cached = authStatusCache.get(session)
@@ -130,11 +134,14 @@ export async function getSpotifyAuthStatus() {
   const request = (async () => {
     try {
       const res = await fetch('/api/spotify/status', { headers, signal: AbortSignal.timeout(15000) })
+      if (clientLoggedOut) return guestStatus
       if (!res.ok) return { configured: isSpotifyConfigured, authed: isSpotifyAuthed }
       const status = await res.json()
+      if (clientLoggedOut) return guestStatus
       authStatusCache.set(session, { status, expiresAt: Date.now() + 30000 })
       return status
     } catch {
+      if (clientLoggedOut) return guestStatus
       return { configured: isSpotifyConfigured, authed: isSpotifyAuthed }
     }
   })().finally(() => {
@@ -145,12 +152,13 @@ export async function getSpotifyAuthStatus() {
 }
 
 export function clearSpotifyClientSession() {
+  clientLoggedOut = true
   returnedFromSpotify = false
   try {
     sessionStorage.removeItem(TAB_SESSION_KEY)
     localStorage.removeItem('musync-spotify-play-intent')
   } catch {}
-  for (const cache of [authStatusCache, authStatusRequests, trackCache, trackErrorCache, trackRequests, catalogCache, catalogErrorCache, catalogRequests]) cache.clear()
+  for (const cache of [authStatusCache, authStatusRequests, trackCache, trackErrorCache, trackRequests, classicPools, catalogCache, catalogErrorCache, catalogRequests]) cache.clear()
   window.dispatchEvent(new CustomEvent('musync:spotify-auth-changed', { detail: { authed: false } }))
 }
 
@@ -163,7 +171,7 @@ export async function fetchTracks({
   limit = 120,
   offset,
   source = 'unknown',
-  reusePool = false,
+  includePageInfo = false,
   allowPartial = false,
   timeoutMs = REQUEST_TIMEOUT_MS,
 } = {}) {
@@ -172,11 +180,12 @@ export async function fetchTracks({
   const effectiveOffset = Number.isFinite(offset) ? offset : 0
   const requestedOffset = Math.max(Math.floor(effectiveOffset / 10) * 10, 0)
   const cacheKey = JSON.stringify([getTabSessionId(), source === 'classic', trackCacheKey({ genre, musicOrigin, yearFrom, yearTo, difficulty, limit: requestedLimit, offset: requestedOffset }), allowPartial, timeoutMs])
+  const formatResult = (result) => includePageInfo ? result : result.tracks
   const cached = trackCache.get(cacheKey)
-  if (cached && (cached.expiresAt > Date.now() || (reusePool && cached.tracks.length))) {
+  if (cached && cached.expiresAt > Date.now()) {
     trackLog('fetchTracks', source, 'cache-hit', { query: { genre, yearFrom, yearTo, difficulty }, requestId: nextRequestId() })
     if (dbgEnabled) console.log(`[SpotifyInstrument]  -> served ${cached.tracks.length} tracks from cache`)
-    return cached.tracks
+    return formatResult(cached)
   }
   const cachedError = trackErrorCache.get(cacheKey)
   if (cachedError && cachedError.expiresAt > Date.now()) {
@@ -186,7 +195,7 @@ export async function fetchTracks({
   if (cachedError) trackErrorCache.delete(cacheKey)
   if (trackRequests.has(cacheKey)) {
     trackLog('fetchTracks', source, 'in-flight-dedup', { query: { genre, yearFrom, yearTo, difficulty } })
-    return trackRequests.get(cacheKey)
+    return formatResult(await trackRequests.get(cacheKey))
   }
   const requestId = nextRequestId()
   trackLog('fetchTracks', source, 'request-start', { query: { genre, yearFrom, yearTo, difficulty }, requestId })
@@ -205,12 +214,13 @@ export async function fetchTracks({
     const tracks = []
     const seen = new Set()
     const pageSize = 10
-    const maxPages = Math.ceil(requestedLimit / pageSize)
+    const maxPages = includePageInfo ? Math.ceil(requestedLimit / pageSize) : Math.max(5, Math.ceil(requestedLimit / pageSize))
+    let nextOffset = requestedOffset
     for (let page = 0; page < maxPages; page += 1) {
       const pageParams = new URLSearchParams(sp)
       const remaining = requestedLimit - tracks.length
       pageParams.set('limit', String(Math.min(pageSize, remaining)))
-      pageParams.set('offset', String(requestedOffset + page * pageSize))
+      pageParams.set('offset', String(nextOffset))
       let result
       try {
         result = await fetchJson(`/api/spotify/tracks?${pageParams.toString()}`, { timeoutMs })
@@ -226,6 +236,8 @@ export async function fetchTracks({
         throw error
       }
       const pageTracks = Array.isArray(data.tracks) ? data.tracks : []
+      nextOffset = data.nextOffset === null ? null : Number.isFinite(data.nextOffset)
+        ? data.nextOffset : pageTracks.length === pageSize ? nextOffset + pageSize : null
       for (const track of pageTracks) {
         if (track.id && track.title && track.artist && !seen.has(track.id)) {
           seen.add(track.id)
@@ -233,14 +245,16 @@ export async function fetchTracks({
         }
       }
       console.log(`[Track] tracks normalized: ${tracks.length}`)
-      if (tracks.length >= requestedLimit || pageTracks.length === 0) break
+      if (tracks.length >= requestedLimit || nextOffset === null) break
     }
     const usableTracks = tracks.slice(0, requestedLimit)
-    trackCache.set(cacheKey, { tracks: usableTracks, expiresAt: Date.now() + TRACK_CACHE_TTL_MS })
+    const result = { tracks: usableTracks, nextOffset, expiresAt: Date.now() + TRACK_CACHE_TTL_MS }
+    trackCache.set(cacheKey, result)
     trackLog('fetchTracks', source, 'request-complete', { fetched: usableTracks.length, requestId })
-    return usableTracks
+    return result
   } catch (error) {
-   trackErrorCache.set(cacheKey, { error, expiresAt: Date.now() + TRACK_ERROR_TTL_MS })
+   error.retryAt = Date.now() + (error.retryAfter > 0 ? error.retryAfter * 1000 : TRACK_ERROR_TTL_MS)
+   trackErrorCache.set(cacheKey, { error, expiresAt: error.retryAt })
    trackLog('fetchTracks', source, 'request-error', { code: error?.code || error?.status || error?.message, requestId })
    throw error
   } finally {
@@ -248,7 +262,7 @@ export async function fetchTracks({
    }
   })()
   trackRequests.set(cacheKey, request)
-  return request
+  return formatResult(await request)
 }
 
 export async function fetchTracksByIds(ids, { genre = 'Spotify', difficulty = 0, source = 'unknown' } = {}) {
@@ -280,7 +294,44 @@ export async function fetchTracksByIds(ids, { genre = 'Spotify', difficulty = 0,
 
 export async function fetchRandomTrack({ genre, musicOrigin, yearFrom, yearTo, difficulty, recentIds = [] , source = 'unknown', preferPopular = false } = {}) {
   const classic = source === 'classic'
-  const tracks = await fetchTracks({ genre, musicOrigin, yearFrom, yearTo, difficulty, limit: classic ? 30 : 120, source, reusePool: classic, allowPartial: classic })
+  if (classic) {
+    const key = JSON.stringify([getTabSessionId(), genre, musicOrigin, yearFrom, yearTo, difficulty])
+    let pool = classicPools.get(key)
+    if (!pool) {
+      pool = { tracks: new Map(), played: new Set(), nextOffset: 0, pending: null, expiresAt: 0 }
+      classicPools.set(key, pool)
+    }
+    for (const id of recentIds) pool.played.add(id)
+    if (pool.expiresAt && pool.expiresAt <= Date.now() && !pool.pending) {
+      pool.tracks.clear()
+      pool.nextOffset = 0
+    }
+    const available = () => [...pool.tracks.values()].filter((track) => !pool.played.has(track.id))
+    const loadPage = () => {
+      if (pool.pending) return pool.pending
+      if (pool.nextOffset === null) return Promise.resolve()
+      pool.pending = (async () => {
+        const page = await fetchTracks({ genre, musicOrigin, yearFrom, yearTo, difficulty, limit: 10, offset: pool.nextOffset, source, includePageInfo: true })
+        for (const track of page.tracks) pool.tracks.set(track.id, track)
+        pool.nextOffset = page.nextOffset
+        pool.expiresAt = page.expiresAt
+      })().finally(() => { pool.pending = null })
+      return pool.pending
+    }
+    // Bound work per interaction; keep the cursor so a retry continues scanning.
+    for (let pages = 0; !available().length && pool.nextOffset !== null && pages < 5; pages++) await loadPage()
+    let candidates = available()
+    if (!candidates.length && pool.nextOffset === null && pool.tracks.size) {
+      pool.played.clear()
+      candidates = [...pool.tracks.values()]
+    }
+    const selected = selectGameTrack(candidates, recentIds)
+    if (selected) pool.played.add(selected.id)
+    // One deduplicated page in the background while the remaining songs play.
+    if (selected && available().length <= 3 && pool.nextOffset !== null) void loadPage().catch(() => {})
+    return selected
+  }
+  const tracks = await fetchTracks({ genre, musicOrigin, yearFrom, yearTo, difficulty, limit: 120, source })
   return selectGameTrack(tracks, recentIds, { preferPopular })
 }
 

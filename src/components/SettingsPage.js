@@ -48,7 +48,7 @@ export default function SettingsPage({ difficulty, onDifficultyChange, showDiffi
             <span className="settings-label">Music Volume</span>
             <span className="settings-desc">Master volume for in-game audio (${settings.volume}%)</span>
           </div>
-          <input type="range" min="0" max="100" value=${settings.volume} className="settings-range" onChange=${(e) => update({ volume: Number(e.target.value) })} />
+          <input type="range" min="0" max="100" value=${settings.volume} style=${{ '--range-value': `${settings.volume}%` }} className="settings-range" onInput=${(e) => update({ volume: Number(e.target.value) })} onChange=${(e) => update({ volume: Number(e.target.value) })} aria-label="Music volume" />
         </div>
       `,
     },

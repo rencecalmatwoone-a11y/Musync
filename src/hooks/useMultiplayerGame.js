@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'https://esm.sh/react@19'
 import { getActivePool, getTrackById, pickRoundTracks, resetSessionTrackHistory, selectGameTrack, setActivePool, secureShuffle } from '../data/tracks.js'
 import useRoundTimer from './useRoundTimer.js'
-import { fetchTracks, fetchVSAudioTracks, eraToYears, resolveVSAudioPreview } from '../spotify/client.js'
+import { fetchTracks, fetchVSAudioTracks, eraToYears, resolveVSAudioPreview, getSpotifyAuthStatus } from '../spotify/client.js'
 import useAudioVolume, { getAudioVolume, setAudioVolume } from './useAudioSettings.js'
 
 const TOTAL_ROUNDS = 10
@@ -366,7 +366,9 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
     roundFiltersRef.current = { genre, era, difficulty }
     nextPoolOffsetRef.current = 10
     poolErrorRef.current = null
+    let allowGuestFallback = false
     try {
+      allowGuestFallback = !(await getSpotifyAuthStatus()).authed
       const { yearFrom, yearTo } = eraToYears(era)
       const tracks = await fetchTracks({ genre, yearFrom, yearTo, difficulty, limit: vsAi ? 10 : 120, offset: 0, allowPartial: vsAi, ...(vsAi ? { timeoutMs: 8000 } : {}) })
       if (generation !== generationRef.current) return []
@@ -378,7 +380,7 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
       }
     } catch (error) {
       if (generation !== generationRef.current) return []
-      if (vsAi) {
+      if (vsAi && allowGuestFallback) {
         const fallbackTracks = await fetchVSAudioTracks({ genre, ...eraToYears(era), limit: 30 })
         if (generation !== generationRef.current) return []
         if (fallbackTracks.length) {
@@ -393,7 +395,7 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
       setActivePool([])
       return []
     }
-    if (vsAi) {
+    if (vsAi && allowGuestFallback) {
       const fallbackTracks = await fetchVSAudioTracks({ genre, ...eraToYears(era), limit: 30 })
       if (generation !== generationRef.current) return []
       if (fallbackTracks.length) {

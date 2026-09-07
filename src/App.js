@@ -17,7 +17,6 @@ import { difficultyKeyClass } from './difficulty.js'
 import useTrackAudio from './hooks/useTrackAudio.js'
 import { eraToYears, getSpotifyAuthStatus } from './spotify/client.js'
 import { fetchClassicTrack } from './data/classicTracks.js'
-import { resetSessionTrackHistory } from './data/tracks.js'
 import { createClassicStats, classicStatsReducer, classicAvailablePoints } from './classicStats.js'
 
 function buildAliases(track) {
@@ -92,29 +91,29 @@ export default function App() {
   const [classicTrackId, setClassicTrackId] = useState(null)
   const [classicPoolLoading, setClassicPoolLoading] = useState(false)
   const [classicPoolError, setClassicPoolError] = useState('')
+  const [classicRetryAt, setClassicRetryAt] = useState(null)
+  const [classicRetryVersion, setClassicRetryVersion] = useState(0)
   const classicRecentRef = useRef([])
-  const classicNextRef = useRef(null)
   const classicPlaybackPositionRef = useRef(0)
   const classicAdvancingRef = useRef(false)
   const classicGenerationRef = useRef(0)
   const classicTrack = classicTracks.find((t) => t.id === classicTrackId) || null
 
   async function resolveClassicTrack(recentIds) {
-    const { yearFrom, yearTo } = musicOrigin === 'OPM / Local' ? {} : eraToYears(era)
-    const searchGenre = musicOrigin === 'OPM / Local' ? 'Any Genre' : genre
-    const track = await fetchClassicTrack({ genre: searchGenre, musicOrigin, yearFrom, yearTo, difficulty: classicDifficulty, recentIds })
+    const { yearFrom, yearTo } = eraToYears(era)
+    const track = await fetchClassicTrack({ genre, musicOrigin, yearFrom, yearTo, difficulty: classicDifficulty, recentIds })
     return track ? { source: track.source, track } : null
   }
 
   useEffect(() => {
     if (mode !== 'classic' || page !== 'game') return
-    resetSessionTrackHistory()
     let alive = true
     const generation = ++classicGenerationRef.current
     setClassicPoolLoading(true)
     setClassicTracks([])
     setClassicTrackId(null)
     setClassicPoolError(null)
+    setClassicRetryAt(null)
     setClassicReveal(false)
     setClassicAnswerLocked(false)
     setClassicResultCorrect(false)
@@ -122,14 +121,14 @@ export default function App() {
     classicPlaybackPositionRef.current = 0
     console.log('[Track] loading started')
     console.log('[Track] request started')
-    resolveClassicTrack([]).then((resolved) => {
+    resolveClassicTrack(classicRecentRef.current).then((resolved) => {
       if (!alive) return
       const track = resolved ? resolved.track : null
       if (track) updateClassicStats({ type: 'advance' })
       const tracks = track ? [track] : []
       setClassicTracks(tracks)
       console.log(`[Track] tracks parsed: ${tracks.length}`)
-      classicRecentRef.current = track ? [track.id] : []
+      if (track) classicRecentRef.current = [...classicRecentRef.current, track.id].slice(-100)
       setClassicTrackId(track ? track.id : null)
       if (track) console.log('[Track] current song selected')
       setClassicPoolLoading(false)
@@ -147,12 +146,23 @@ export default function App() {
       setClassicPoolLoading(false)
       console.log('[Track] loading finished')
       setClassicPoolError(error?.message || 'Public previews could not load songs.')
+      if (error.rateLimited || error.quotaExceeded) setClassicRetryAt(error.retryAt || Date.now() + Math.max(1, error.retryAfter || 60) * 1000)
     })
     return () => {
       alive = false
       if (classicGenerationRef.current === generation) classicGenerationRef.current += 1
     }
-  }, [mode, page, genre, musicOrigin, era, classicDifficulty])
+  }, [mode, page, genre, musicOrigin, era, classicDifficulty, spotifyAuthed, classicRetryVersion])
+
+  useEffect(() => {
+    if (!classicRetryAt || mode !== 'classic' || page !== 'game') return
+    const timer = setTimeout(() => {
+      setClassicRetryAt(null)
+      if (classicTrack) advanceClassicRound()
+      else setClassicRetryVersion((value) => value + 1)
+    }, Math.min(2147483647, Math.max(0, classicRetryAt - Date.now()) + 250))
+    return () => clearTimeout(timer)
+  }, [classicRetryAt, mode, page, classicTrackId])
 
   const classicDuration = (classicTrack && classicTrack.durationMs
     ? Math.min(15, Math.round(classicTrack.durationMs / 1000))
@@ -168,6 +178,7 @@ export default function App() {
     const generation = classicGenerationRef.current
     setClassicPoolLoading(true)
     setClassicPoolError(null)
+    setClassicRetryAt(null)
     let resolved
     try {
       resolved = await resolveClassicTrack(classicRecentRef.current)
@@ -175,6 +186,7 @@ export default function App() {
       if (generation !== classicGenerationRef.current) return false
       setClassicPoolLoading(false)
       setClassicPoolError(error?.message || 'Public previews could not load another song.')
+      if (error.rateLimited || error.quotaExceeded) setClassicRetryAt(error.retryAt || Date.now() + Math.max(1, error.retryAfter || 60) * 1000)
       return false
     }
     if (generation !== classicGenerationRef.current) return false
@@ -184,7 +196,7 @@ export default function App() {
       return false
     }
     const next = resolved.track
-    const recent = [...classicRecentRef.current, next.id].slice(-15)
+    const recent = [...classicRecentRef.current, next.id].slice(-100)
     classicRecentRef.current = recent
     setClassicTracks([next])
     setClassicTrackId(next.id)
@@ -353,6 +365,13 @@ export default function App() {
                   availablePoints=${classicAvailablePoints(classicStats, classicDifficulty)}
                   feedback=${feedback}
                 />
+                ${classicPoolError && !classicReveal && html`
+                  <div className="audio-status" role="status">
+                    ${classicRetryAt ? html`<p>Spotify is cooling down. We’ll retry automatically when the cooldown ends.</p>` : html`
+                      <button type="button" className="song-reveal__details-btn" disabled=${classicPoolLoading} onClick=${() => classicTrack ? advanceClassicRound() : setClassicRetryVersion((value) => value + 1)}>Retry songs</button>
+                    `}
+                  </div>
+                `}
                 ${classicReveal && html`
                   <${SongReveal}
                     song=${classicTrack}
@@ -366,6 +385,9 @@ export default function App() {
                     startAt=${classicRevealStartAt}
                     onContinue=${advanceClassicRound}
                     classicMode=${true}
+                    nextLoading=${classicPoolLoading}
+                    nextError=${classicPoolError}
+                    nextRetryAt=${classicRetryAt}
                   />
                 `}
               `}

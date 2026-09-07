@@ -144,7 +144,7 @@ export default function GameArea({
           options=${ERAS}
           value=${era}
           onChange=${onEraChange}
-          disabled=${filtersDisabled || musicOrigin === 'OPM / Local'}
+          disabled=${filtersDisabled}
         />
         <div className="filter-bar__divider" aria-hidden="true"></div>
         <${FilterCarousel}
@@ -152,7 +152,7 @@ export default function GameArea({
           options=${GENRES}
           value=${genre}
           onChange=${onGenreChange}
-          disabled=${filtersDisabled || musicOrigin === 'OPM / Local'}
+          disabled=${filtersDisabled}
         />
       </div>
       <div className=${`music-origin-badge music-origin-badge--${musicOrigin === 'OPM / Local' ? 'local' : 'international'}`}>
@@ -172,6 +172,7 @@ export default function GameArea({
         onPlaybackPositionChange=${onPlaybackPositionChange}
         revealActive=${revealActive}
         onPractice=${onPractice}
+        availablePoints=${availablePoints}
       />
       <${GuessInput} onSubmit=${onSubmit} feedback=${feedback} disabled=${answerLocked} search=${searchClassicCatalog} availablePoints=${availablePoints} />
     </section>

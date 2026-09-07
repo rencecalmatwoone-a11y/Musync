@@ -40,6 +40,7 @@ export default function AudioPlayer({
   onPlaybackPositionChange = null,
   revealActive = false,
   onPractice = null,
+  availablePoints = null,
 }) {
   const [playing, setPlaying] = useState(false)
   const [elapsed, setElapsed] = useState(0)
@@ -124,6 +125,9 @@ export default function AudioPlayer({
   }
 
   const offset = CIRCUMFERENCE - (elapsed / duration) * CIRCUMFERENCE
+  const nextStageIndex = STAGES.findIndex((stage) => elapsed < Math.min(stage, duration))
+  const currentStage = Math.min(nextStageIndex === -1 ? STAGES.length : nextStageIndex + 1, STAGES.length)
+  const progressRatio = Math.max(0, Math.min(1, elapsed / Math.max(1, duration)))
   const playable = Boolean(trackId && (playbackType === 'spotify-sdk' || (playbackUrl && playbackType === 'preview')))
   const playbackError = playbackType === 'spotify-sdk' ? spotify.error : audioError || audio.error
   const playbackMessage = revealActive ? '' : audioLoading ? 'Loading track...'
@@ -132,7 +136,14 @@ export default function AudioPlayer({
   return html`
     <div className="audio-player">
       <audio ref=${audio.attach} src=${playbackUrl || undefined} preload="auto" onEnded=${() => setPlaying(false)} onError=${() => setPlaying(false)} style=${{ display: 'none' }} />
-      <div className="player-ring">
+      <div
+        className=${`player-ring${playing ? ' is-playing' : ''}${revealActive ? ' is-revealed' : ''}`}
+        role="progressbar"
+        aria-label="Classic mode listening progress"
+        aria-valuemin="0"
+        aria-valuemax=${duration}
+        aria-valuenow=${Math.floor(elapsed)}
+      >
         <svg viewBox=${`0 0 ${SIZE} ${SIZE}`} aria-hidden="true">
           <circle className="track" cx=${SIZE / 2} cy=${SIZE / 2} r=${RADIUS} />
           <circle
@@ -144,6 +155,29 @@ export default function AudioPlayer({
             strokeDashoffset=${offset}
           />
         </svg>
+        <div className="player-ring__markers" aria-hidden="true">
+          <span
+            className="player-ring__playhead"
+            style=${{ '--playhead-angle': `${progressRatio * 360}deg` }}
+          >
+            <i></i>
+          </span>
+          ${STAGES.map((stage, index) => {
+            const stageTime = Math.min(stage, duration)
+            const angle = (stageTime / Math.max(1, duration)) * 360
+            const reached = elapsed >= stageTime
+            return html`
+              <span
+                key=${stage}
+                className=${`player-ring__marker player-ring__marker--${index + 1}${reached ? ' is-reached' : ''}${index === nextStageIndex ? ' is-next' : ''}`}
+                style=${{ '--marker-angle': `${angle}deg` }}
+              >
+                <i></i>
+                <b>${availablePoints === null ? '' : `${availablePoints} PTS`}</b>
+              </span>
+            `
+          })}
+        </div>
         <button
           type="button"
           className=${`play-btn${playing || revealActive ? ' is-playing' : ''}`}
@@ -171,6 +205,12 @@ export default function AudioPlayer({
         </div>
       </div>
       <div className="timer">${formatTime(elapsed)}</div>
+      ${availablePoints !== null && html`
+        <div className="player-stage-readout" aria-live="polite">
+          <span>STAGE ${currentStage} / ${STAGES.length}</span>
+          <strong>${availablePoints} PTS</strong>
+        </div>
+      `}
       ${playbackMessage && html`<p className="audio-status">${playbackMessage}</p>`}
       <button
         type="button"

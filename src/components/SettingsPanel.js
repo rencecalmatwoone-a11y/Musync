@@ -50,8 +50,11 @@ export default function SettingsPanel({ settings, onUpdate, onClose }) {
               min="0"
               max="100"
               value=${local.volume}
+              style=${{ '--range-value': `${local.volume}%` }}
+              onInput=${(e) => handleChange('volume', Number(e.target.value))}
               onChange=${(e) => handleChange('volume', Number(e.target.value))}
               className="settings-range"
+              aria-label="Music volume"
             />
           </div>
 

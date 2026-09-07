@@ -112,7 +112,8 @@ export function vsAudioDiagnostics() {
 }
 
 export async function searchVSAudioTracks(genre = 'Any Genre', limit = 30) {
-  const requestedLimit = Math.min(Math.max(Number(limit) || 30, 1), 50)
+  const requestedLimit = Math.min(Math.max(Number(limit) || 30, 1), 1500)
+  const deezerSearchLimit = Math.min(requestedLimit, 100)
   const queries = [...FEATURED_VS_ARTISTS, genre && genre !== 'Any Genre' ? String(genre) : 'music']
   const responses = await Promise.allSettled(queries.map(async (query) => {
     const params = new URLSearchParams({ q: query, limit: String(requestedLimit) })
@@ -185,26 +186,32 @@ function deezerTrackToClassic(track, genre = 'Any Genre', musicOrigin = 'Interna
   }
 }
 
-export async function searchClassicDeezerTracks({ genre = 'Any Genre', musicOrigin = 'International', yearFrom, yearTo, difficulty = 0, limit = 30, query = '' } = {}) {
-  const requestedLimit = Math.min(Math.max(Number(limit) || 30, 1), 50)
+export async function searchClassicDeezerTracks({ genre = 'Any Genre', musicOrigin = 'International', yearFrom, yearTo, difficulty = 0, limit = 30, query = '', playlistTracks = [] } = {}) {
+  const requestedLimit = Math.min(Math.max(Number(limit) || 30, 1), 1500)
+  const deezerSearchLimit = Math.min(requestedLimit, 100)
+  const playlistQueries = musicOrigin === 'OPM' ? [] : playlistTracks
+    .slice(0, 500)
+    .map((track) => ({ term: `${track.artists?.map((artist) => artist.name).join(' ') || track.artist || ''} ${track.name || track.title || ''}`.trim(), track }))
+    .filter(({ term }) => term)
   const queries = query
-    ? [query]
+    ? [{ term: query }]
     : musicOrigin === 'OPM'
-      ? ['OPM Filipino', 'Pinoy music', 'Filipino music']
-      : CLASSIC_ARTISTS
-  const responses = await Promise.allSettled(queries.map(async (term) => {
-    const params = new URLSearchParams({ q: term, limit: String(requestedLimit) })
+      ? ['OPM Filipino', 'Pinoy music', 'Filipino music'].map((term) => ({ term }))
+      : CLASSIC_ARTISTS.map((term) => ({ term }))
+        .concat(playlistQueries)
+  const responses = await Promise.allSettled(queries.map(async ({ term, track: playlistTrack }) => {
+    const params = new URLSearchParams({ q: term, limit: String(deezerSearchLimit) })
     const response = await fetch(`${DEEZER_SEARCH_URL}?${params}`, { signal: AbortSignal.timeout(RESOLUTION_TIMEOUT_MS) })
     if (!response.ok) throw new Error(`Deezer search failed with HTTP ${response.status}.`)
     const data = await response.json()
-    return { term, tracks: data.data || [] }
+    return { term, playlistTrack, tracks: data.data || [] }
   }))
   const normalizeArtistName = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
   const artistResults = responses
     .filter((result) => result.status === 'fulfilled')
     .flatMap((result) => {
-      const { term, tracks: results } = result.value
-      if (query || musicOrigin === 'OPM') return [{ term, tracks: results }]
+      const { term, playlistTrack, tracks: results } = result.value
+      if (query || musicOrigin === 'OPM' || playlistTrack) return [{ term, playlistTrack, tracks: results }]
       const wanted = normalizeArtistName(term)
       const matches = results.filter((track) => {
         const artist = normalizeArtistName(track.artist?.name)
@@ -227,13 +234,22 @@ export async function searchClassicDeezerTracks({ genre = 'Any Genre', musicOrig
     return (!yearFrom || (releaseYear && releaseYear >= Number(yearFrom)))
       && (!yearTo || (releaseYear && releaseYear <= Number(yearTo)))
   })
+  const playlistResults = artistResults
+    .filter(({ playlistTrack }) => playlistTrack)
+    .flatMap(({ playlistTrack, tracks: results }) => {
+      const wantedTitle = normalizeArtistName(playlistTrack.name || playlistTrack.title)
+      const wantedArtist = normalizeArtistName(playlistTrack.artists?.[0]?.name || playlistTrack.artist)
+      return results.filter((track) => normalizeArtistName(track.title) === wantedTitle
+        && normalizeArtistName(track.artist?.name) === wantedArtist).slice(0, 1)
+    })
+    .filter((track) => filtered.includes(track))
   const balanced = query || musicOrigin === 'OPM'
     ? filtered
-    : [...new Map(CLASSIC_ARTISTS.flatMap((artist) => filtered
+    : [...new Map([...CLASSIC_ARTISTS.flatMap((artist) => filtered
       .filter((track) => normalizeArtistName(track.artist?.name).includes(normalizeArtistName(artist)))
       .sort((a, b) => Number(b.rank || 0) - Number(a.rank || 0))
       .slice(0, 3)
-      .map((track) => [track.id, track]))).values()]
+      .map((track) => [track.id, track])), ...playlistResults.map((track) => [track.id, track])]).values()]
   return balanced
     .sort((a, b) => Number(b.rank || 0) - Number(a.rank || 0))
     .slice(0, requestedLimit)

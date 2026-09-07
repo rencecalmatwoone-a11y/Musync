@@ -131,3 +131,85 @@ test('revoked sessions, missing scopes, and changed client configuration fail ex
   await seed('changed-app', { clientId: 'old-client' })
   await assert.rejects(spotify.getSpotifyPlaybackToken('changed-app'), { code: 'SPOTIFY_LOGIN_REQUIRED' })
 })
+
+test('origin metadata uses bounded concurrency and caches artists across pages', async () => {
+  await seed('metadata')
+  const previousFetch = globalThis.fetch
+  let active = 0
+  let peak = 0
+  let lookups = 0
+  globalThis.fetch = async (input) => {
+    const url = new URL(input)
+    if (url.pathname === '/v1/search') return Response.json({ tracks: { items: Array.from({ length: 10 }, (_, i) => ({ ...rawTrack(`parallel-${i}`), artists: [{ id: `parallel-artist-${i}`, name: 'Artist' }] })) } })
+    assert.ok(url.pathname.startsWith('/v1/artists/parallel-artist-'))
+    lookups++
+    peak = Math.max(peak, ++active)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    active--
+    return Response.json({ genres: ['pop'] })
+  }
+  try {
+    const options = { sessionId: 'metadata', requireUser: true, musicOrigin: 'International' }
+    const tracks = await search(options)
+    assert.equal(tracks.length, 10)
+    assert.ok(tracks.every((track) => track.musicOrigin === 'International'))
+    assert.equal(peak, 3)
+    await search({ ...options, offset: 10 })
+    assert.equal(lookups, 10)
+  } finally { globalThis.fetch = previousFetch }
+})
+
+test('combined OPM, genre and era filters reject unrelated and unknown metadata and retain pagination', async () => {
+  await seed('filters')
+  const previousFetch = globalThis.fetch
+  const genres = { local: ['opm', 'pinoy rock'], foreign: ['rock'], wrongGenre: ['opm', 'pop'], unknown: [] }
+  const makeTrack = (id, artist, year = 1995) => ({ ...rawTrack(id), artists: [{ id: `filter-${artist}`, name: artist }], album: { release_date: `${year}-01-01` } })
+  globalThis.fetch = async (input) => {
+    const url = new URL(input)
+    if (url.pathname === '/v1/search') {
+      assert.match(url.searchParams.get('q'), /year:1990-1999/)
+      if (url.searchParams.get('q').includes('genre:opm')) {
+        return Response.json({ tracks: { next: 'https://api.spotify.com/v1/search?offset=10', items: [
+          makeTrack('good', 'local'), makeTrack('foreign', 'foreign'), makeTrack('pop', 'wrongGenre'),
+          makeTrack('unknown', 'unknown'), makeTrack('wrong-year', 'local', 2020),
+          { ...makeTrack('unplayable', 'local'), is_playable: false },
+        ] } })
+      }
+      return Response.json({ tracks: { next: null, items: [makeTrack('foreign', 'foreign'), makeTrack('local', 'local'), makeTrack('unknown', 'unknown')] } })
+    }
+    return Response.json({ genres: genres[url.pathname.split('filter-')[1]] || [] })
+  }
+  try {
+    const options = { sessionId: 'filters', requireUser: true, genre: 'Rock', yearFrom: 1990, yearTo: 1999, includePageInfo: true }
+    const page = await search({ ...options, musicOrigin: 'OPM' })
+    assert.deepEqual(page.tracks.map((track) => track.id), ['good'])
+    assert.equal(page.nextOffset, 10)
+    assert.deepEqual(await search({ ...options, musicOrigin: 'OPM' }), page, 'cached pages preserve cursor')
+    const international = await search({ ...options, musicOrigin: 'International' })
+    assert.deepEqual(international.tracks.map((track) => track.id), ['foreign'])
+    const empty = await search({ ...options, musicOrigin: 'OPM', genre: 'Country' })
+    assert.equal(empty.tracks.length, 0)
+    assert.equal(empty.nextOffset, 10, 'filtered empty page is not end of catalog')
+  } finally { globalThis.fetch = previousFetch }
+})
+
+test('server quota cooldown counts down and recovers after expiry', async () => {
+  await seed('quota-recovery')
+  const previousFetch = globalThis.fetch
+  const originalNow = Date.now
+  let now = originalNow()
+  let requests = 0
+  Date.now = () => now
+  globalThis.fetch = async () => ++requests === 1
+    ? Response.json({ error: { reason: 'QUOTA_EXCEEDED' } }, { status: 403 })
+    : Response.json({ tracks: { items: [rawTrack('recovered')], next: null } })
+  try {
+    const options = { sessionId: 'quota-recovery', requireUser: true }
+    await assert.rejects(search(options), { code: 'SPOTIFY_QUOTA_EXCEEDED', retryAfterMs: 300000 })
+    now += 299000
+    await assert.rejects(search(options), { code: 'SPOTIFY_QUOTA_EXCEEDED', retryAfterMs: 1000 })
+    assert.equal(requests, 1)
+    now += 1001
+    assert.equal((await search(options))[0].id, 'recovered')
+  } finally { globalThis.fetch = previousFetch; Date.now = originalNow }
+})

@@ -1,4 +1,4 @@
-import { fetchRandomTrack, getSpotifyAuthStatus } from '../spotify/client.js'
+import { fetchRandomTrack, getSpotifyAuthStatus, spotifySessionHeaders } from '../spotify/client.js'
 
 const guestTrackCache = new Map()
 const guestTrackRequests = new Map()
@@ -11,10 +11,29 @@ function guestDifficultyPool(tracks, difficulty) {
   const sorted = [...tracks].sort((a, b) => Number(b.popularity || 0) - Number(a.popularity || 0))
   const bands = [0.2, 0.4, 0.6, 0.8, 1]
   const band = bands[Math.min(Math.max(Number(difficulty) || 0, 0), bands.length - 1)]
-  return sorted.slice(0, Math.max(1, Math.ceil(sorted.length * band)))
+  const eligible = sorted.slice(0, Math.max(1, Math.ceil(sorted.length * band)))
+  for (let index = eligible.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1))
+    ;[eligible[index], eligible[swapIndex]] = [eligible[swapIndex], eligible[index]]
+  }
+  return eligible
 }
 
-function guestKey({ genre = 'Any Genre', musicOrigin = 'International', yearFrom, yearTo, difficulty = 0, limit = 30 } = {}) {
+function getGuestRefreshTrackId() {
+  try {
+    return typeof sessionStorage === 'undefined' ? '' : sessionStorage.getItem('musync-guest-last-track') || ''
+  } catch {
+    return ''
+  }
+}
+
+function setGuestRefreshTrackId(trackId) {
+  try {
+    if (typeof sessionStorage !== 'undefined' && trackId) sessionStorage.setItem('musync-guest-last-track', trackId)
+  } catch {}
+}
+
+function guestKey({ genre = 'Any Genre', musicOrigin = 'International', yearFrom, yearTo, difficulty = 0, limit = 1500 } = {}) {
   return JSON.stringify([genre, normalizeOrigin(musicOrigin), yearFrom || '', yearTo || '', difficulty, limit])
 }
 
@@ -28,11 +47,11 @@ async function fetchGuestTracks(filters = {}) {
       genre: filters.genre || 'Any Genre',
       musicOrigin: normalizeOrigin(filters.musicOrigin),
       difficulty: String(filters.difficulty || 0),
-      limit: String(filters.limit || 30),
+      limit: String(filters.limit || 1500),
     })
     if (filters.yearFrom) params.set('yearFrom', String(filters.yearFrom))
     if (filters.yearTo) params.set('yearTo', String(filters.yearTo))
-    const response = await fetch(`/api/classic/tracks?${params}`, { signal: AbortSignal.timeout(15000) })
+    const response = await fetch(`/api/classic/tracks?${params}`, { headers: spotifySessionHeaders(), signal: AbortSignal.timeout(15000) })
     const data = await response.json().catch(() => ({}))
     if (!response.ok) {
       const error = new Error(data.error || 'Guest Classic catalog failed.')
@@ -51,7 +70,7 @@ async function fetchGuestTracks(filters = {}) {
 export async function fetchClassicTrack({ recentIds = [], ...filters } = {}) {
   const status = await getSpotifyAuthStatus()
   if (status.authed) {
-    const track = await fetchRandomTrack({ ...filters, recentIds, source: 'classic', preferPopular: true })
+    const track = await fetchRandomTrack({ ...filters, recentIds, source: 'classic' })
     if (!track) return null
     const playbackUrl = track.spotifyPreviewUrl || null
     return {
@@ -60,8 +79,12 @@ export async function fetchClassicTrack({ recentIds = [], ...filters } = {}) {
       playbackUrl,
     }
   }
-  const tracks = await fetchGuestTracks({ ...filters, limit: 30 })
+  const tracks = await fetchGuestTracks({ ...filters, limit: 1500 })
   const recent = new Set(recentIds)
+  if (!recentIds.length) {
+    const lastRefreshTrackId = getGuestRefreshTrackId()
+    if (lastRefreshTrackId) recent.add(lastRefreshTrackId)
+  }
   const preferred = guestDifficultyPool(tracks, filters.difficulty)
   const available = preferred.filter((track) => !recent.has(track.id))
   if (!available.length) {
@@ -70,7 +93,9 @@ export async function fetchClassicTrack({ recentIds = [], ...filters } = {}) {
       .filter((track) => !recent.has(track.id)))
   }
   if (!available.length) return null
-  return available[Math.floor(Math.random() * available.length)]
+  const selected = available[Math.floor(Math.random() * available.length)]
+  setGuestRefreshTrackId(selected.id)
+  return selected
 }
 
 export async function searchClassicCatalog(query) {
@@ -79,7 +104,7 @@ export async function searchClassicCatalog(query) {
   const path = status.authed
     ? `/api/catalog/search?q=${encodeURIComponent(query)}&limit=8`
     : `/api/classic/guest-search?q=${encodeURIComponent(query)}&limit=8`
-  const response = await fetch(path)
+  const response = await fetch(path, { headers: spotifySessionHeaders() })
   const data = await response.json().catch(() => ({}))
   if (!response.ok) throw new Error(data.error || 'Classic catalog search failed.')
   return Array.isArray(data.tracks) ? data.tracks : []
