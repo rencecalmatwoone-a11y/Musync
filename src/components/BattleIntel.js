@@ -1,6 +1,9 @@
 import { html } from '../html.js'
 
 export default function BattleIntel({ rank, total, gap, score, streak, avgSpeed, accuracy, correct, asked, remaining }) {
+  const suffix = rank % 100 >= 11 && rank % 100 <= 13
+    ? 'th'
+    : ({ 1: 'st', 2: 'nd', 3: 'rd' }[rank % 10] || 'th')
   const segments = [
     ...Array.from({ length: correct }, () => 'hit'),
     ...Array.from({ length: Math.max(0, asked - correct) }, () => 'miss'),
@@ -14,7 +17,7 @@ export default function BattleIntel({ rank, total, gap, score, streak, avgSpeed,
       <article className="intel-card intel-card--rank">
         <p className="intel-kicker">CURRENT RANK</p>
         <p className="intel-rank">
-          <span>${rank}<small>st</small></span>
+          <span>${rank}<small>${suffix}</small></span>
           <span className="intel-rank__of">/ ${total}</span>
         </p>
         <div className="intel-gap">

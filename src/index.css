@@ -535,6 +535,7 @@ button:focus-visible {
 }
 
 .filter-group {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 9px;
@@ -542,8 +543,42 @@ button:focus-visible {
   flex: 1;
 }
 
-.filter-group.is-disabled {
+.filter-group.is-disabled > :not(.filter-premium-reminder) {
   opacity: 0.42;
+}
+
+.filter-premium-reminder {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  z-index: 10;
+  padding: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--bg-pill);
+  color: var(--cream-muted);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  font-size: 12px;
+  line-height: 1.5;
+  animation: filter-reminder-enter 240ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+
+@keyframes filter-reminder-enter {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .filter-premium-reminder {
+    animation: none;
+  }
 }
 
 .filter-group__label {
@@ -934,19 +969,25 @@ button:focus-visible {
   align-items: center;
   margin-bottom: 24px;
   flex-shrink: 0;
+  width: 100%;
+  padding-top: 14px;
 }
 
 .player-ring {
   position: relative;
-  width: 196px;
-  height: 196px;
+  width: min(196px, 58vw);
+  aspect-ratio: 1;
+  flex-shrink: 0;
   container-type: inline-size;
   isolation: isolate;
 }
 
 .player-ring > svg {
-  width: 196px;
-  height: 196px;
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* The ring reaches the viewBox edges; let its animated glow extend past them. */
+  overflow: visible;
   transform: rotate(-90deg);
 }
 
@@ -959,8 +1000,9 @@ button:focus-visible {
 .player-ring .progress {
   fill: none;
   stroke: var(--yellow);
+  stroke-width: 7;
   stroke-linecap: round;
-  transition: stroke-dashoffset 0.12s linear;
+  transition: stroke-dashoffset 80ms linear;
   filter: drop-shadow(0 0 5px rgba(var(--dc-rgb), 0.38));
 }
 
@@ -986,7 +1028,14 @@ button:focus-visible {
   inset: 0;
   transform: rotate(var(--playhead-angle));
   transform-origin: center;
-  transition: transform 0.12s linear;
+  transition: transform 80ms linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .player-ring .progress,
+  .player-ring__playhead {
+    transition: none;
+  }
 }
 
 .player-ring__playhead i {
@@ -3808,12 +3857,6 @@ button:focus-visible {
 
   .music-origin-badge {
     margin-bottom: 16px;
-  }
-
-  .player-ring,
-  .player-ring > svg {
-    width: min(196px, 58vw);
-    height: min(196px, 58vw);
   }
 
   .guess-row {

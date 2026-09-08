@@ -15,18 +15,6 @@ function formatTime(seconds) {
   return `0:${String(whole).padStart(2, '0')}`
 }
 
-function stageIndex(elapsed) {
-  if (elapsed <= 0) return 0
-  for (let i = 0; i < STAGES.length; i++) {
-    if (elapsed <= STAGES[i]) return i
-  }
-  return STAGES.length - 1
-}
-
-function stageStart(index) {
-  return index === 0 ? 0 : STAGES[index - 1]
-}
-
 export default function AudioPlayer({
   duration = 15,
   trackId = null,
@@ -43,6 +31,8 @@ export default function AudioPlayer({
 }) {
   const [playing, setPlaying] = useState(false)
   const [elapsed, setElapsed] = useState(0)
+  const [selectedStage, setSelectedStage] = useState(0)
+  const selectedStageRef = useRef(0)
   const audio = usePreviewAudio()
   const spotify = useSpotifyPlayback(playbackType === 'spotify-sdk')
   const playAttempt = useRef(0)
@@ -54,12 +44,12 @@ export default function AudioPlayer({
   useEffect(() => () => { playAttempt.current++; audio.stop() }, [audio.stop])
   const startedAt = useRef(null)
   const baseElapsed = useRef(0)
-  const target = useRef(STAGES[0])
+  const target = useRef(Math.min(STAGES[0], duration))
   const frame = useRef(0)
-  const atBoundary = elapsed >= duration || STAGES.includes(elapsed)
+  const atBoundary = elapsed >= target.current
 
   useEffect(() => {
-    if (!playing) return undefined
+    if (!playing || revealActive) return undefined
 
     startedAt.current = performance.now()
     const tick = (now) => {
@@ -69,7 +59,6 @@ export default function AudioPlayer({
       if (next >= limit) {
         setPlaying(false)
         baseElapsed.current = limit
-        if (limit >= duration && onExpire) onExpire()
         return
       }
       frame.current = requestAnimationFrame(tick)
@@ -77,16 +66,17 @@ export default function AudioPlayer({
 
     frame.current = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(frame.current)
-  }, [playing])
+  }, [playing, revealActive, duration])
 
   useEffect(() => {
     if (onPlaybackPositionChange) onPlaybackPositionChange(elapsed)
   }, [elapsed, onPlaybackPositionChange])
 
   async function toggle() {
-    if (!trackId || !playbackUrl || audioLoading || revealActive) return
+    if (!playable || audioLoading || revealActive) return
     const attempt = ++playAttempt.current
     if (playing) {
+      cancelAnimationFrame(frame.current)
       baseElapsed.current = elapsed
       if (playbackType === 'spotify-sdk') spotify.pause()
       else audio.pause()
@@ -94,8 +84,10 @@ export default function AudioPlayer({
       return
     }
     if (atBoundary) {
-      const index = stageIndex(elapsed)
-      baseElapsed.current = stageStart(index)
+      const index = selectedStageRef.current
+      // Each stage unlocks a longer clip from the beginning. Replaying must
+      // reach the same checkpoint, without selecting a different stage.
+      baseElapsed.current = 0
       target.current = Math.min(STAGES[index], duration)
       setElapsed(baseElapsed.current)
     } else baseElapsed.current = elapsed
@@ -108,25 +100,30 @@ export default function AudioPlayer({
   }
 
   function skip() {
+    if (audioLoading || !playable || revealActive) return
     playAttempt.current++
+    cancelAnimationFrame(frame.current)
     if (playbackType === 'spotify-sdk') spotify.pause()
     else audio.pause()
-    if (elapsed >= duration) {
+    const index = selectedStageRef.current
+    if (index >= STAGES.length - 1 || STAGES[index] >= duration) {
       setPlaying(false)
       if (onSkip) onSkip()
       return
     }
-    const nextBoundary = STAGES.find((stage) => stage > elapsed + 0.01)
-    const boundary = nextBoundary || duration
+    const nextIndex = index + 1
+    selectedStageRef.current = nextIndex
+    setSelectedStage(nextIndex)
+    target.current = Math.min(STAGES[nextIndex], duration)
     setPlaying(false)
-    setElapsed(boundary)
-    baseElapsed.current = boundary
+    setElapsed(0)
+    baseElapsed.current = 0
   }
 
   const safeDuration = Math.max(1, Number(duration) || 1)
   const progressRatio = Math.max(0, Math.min(1, elapsed / safeDuration))
-  const nextStageIndex = STAGES.findIndex((stage) => elapsed < Math.min(stage, safeDuration))
-  const currentStage = Math.min(nextStageIndex === -1 ? STAGES.length : nextStageIndex + 1, STAGES.length)
+  const nextStageIndex = selectedStage
+  const currentStage = selectedStage + 1
   const playable = Boolean(trackId && (playbackType === 'spotify-sdk' || (playbackUrl && playbackType === 'preview')))
   const playbackError = playbackType === 'spotify-sdk' ? spotify.error : audioError || audio.error
   const playbackMessage = revealActive ? '' : audioLoading ? 'Loading track...'
@@ -182,7 +179,7 @@ export default function AudioPlayer({
           type="button"
           className=${`play-btn${playing || revealActive ? ' is-playing' : ''}`}
           onClick=${toggle}
-          disabled=${audioLoading}
+          disabled=${audioLoading || !playable || revealActive}
           aria-label=${playing ? 'Pause clip' : 'Play clip'}
         >
           ${playing
@@ -216,7 +213,7 @@ export default function AudioPlayer({
         type="button"
         className="skip-btn"
         onClick=${skip}
-        disabled=${audioLoading || !playable}
+        disabled=${audioLoading || !playable || revealActive}
       >
         SKIP
       </button>

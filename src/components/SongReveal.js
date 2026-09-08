@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'https://esm.sh/react@19'
 import { html } from '../html.js'
 import { DIFFICULTIES } from '../difficulty.js'
 import usePreviewAudio from '../hooks/usePreviewAudio.js'
-import { fetchTracksByIds } from '../spotify/client.js'
+import { fetchTracksByIds, searchCatalog } from '../spotify/client.js'
+import { spotifyTrackUrl, matchingSpotifyUrl, spotifySearchUrl } from '../music/spotifyLink.js'
 import { fetchTrackTrivia } from '../music/trivia.js'
 
 export default function SongReveal({
@@ -25,9 +26,22 @@ export default function SongReveal({
   const [showDetails, setShowDetails] = useState(false)
   const [reviewSong, setReviewSong] = useState(song)
   const [triviaText, setTriviaText] = useState(song?.fact || '')
+  const [resolvedSpotify, setResolvedSpotify] = useState(null)
   const detailsRequestRef = useRef(null)
   const audio = usePreviewAudio()
   const prefs = audio.attach
+
+  useEffect(() => {
+    if (!showDetails || !song || spotifyTrackUrl(song)) return undefined
+    let alive = true
+    searchCatalog(`track:"${song.title}" artist:"${song.artist}"`, 8, 'song-reveal-link')
+      .then((tracks) => {
+        const url = matchingSpotifyUrl(song, tracks)
+        if (alive && url) setResolvedSpotify({ song, url })
+      })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [song, showDetails])
 
   useEffect(() => {
     setReviewSong(song)
@@ -66,11 +80,10 @@ export default function SongReveal({
 
   if (!reviewSong) return html`<div className="song-reveal" role="dialog" aria-modal="true" aria-label="Round answer">Loading...</div>`
 
-  const spotifyTrackId = (reviewSong.provider === 'spotify' || reviewSong.source === 'spotify')
-    ? (reviewSong.providerTrackId || String(reviewSong.id || ''))
-    : ''
-  const spotifyUrl = reviewSong.spotifyUrl || reviewSong.externalUrl || reviewSong.external_urls?.spotify || (spotifyTrackId ? `https://open.spotify.com/track/${encodeURIComponent(spotifyTrackId)}` : '')
-  const sourceLabel = reviewSong.provider === 'deezer' ? 'OPEN IN DEEZER' : 'OPEN IN SPOTIFY'
+  const spotifyUrl = spotifyTrackUrl(reviewSong)
+    || (resolvedSpotify?.song === song ? resolvedSpotify.url : '')
+    || spotifySearchUrl(reviewSong)
+  const sourceLabel = 'OPEN IN SPOTIFY'
   const initial = (reviewSong.artist || '?').charAt(0).toUpperCase()
   const artwork = reviewSong.artwork || reviewSong.image || null
   const difficulty = DIFFICULTIES[reviewSong.difficulty]?.label || 'UNKNOWN'

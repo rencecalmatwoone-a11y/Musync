@@ -16,6 +16,7 @@ function FilterCarousel({ label, options, value, onChange, disabled = false }) {
   const selectedIndex = Math.max(0, options.indexOf(value))
   const pageCount = options.length
   const [page, setPage] = useState(selectedIndex)
+  const [showReminder, setShowReminder] = useState(false)
   const dragStart = useRef(null)
   const visibleStart = page
   const visible = options.slice(visibleStart, visibleStart + pageSize)
@@ -24,8 +25,21 @@ function FilterCarousel({ label, options, value, onChange, disabled = false }) {
     if (selectedIndex >= 0) setPage(selectedIndex)
   }, [value])
 
+  useEffect(() => {
+    if (!showReminder) return
+    if (!disabled) {
+      setShowReminder(false)
+      return
+    }
+    const timeout = setTimeout(() => setShowReminder(false), 5000)
+    return () => clearTimeout(timeout)
+  }, [showReminder, disabled])
+
   function changePage(delta) {
-    if (disabled) return
+    if (disabled) {
+      setShowReminder(true)
+      return
+    }
     const next = (page + delta + pageCount) % pageCount
     setPage(next)
     onChange(options[next])
@@ -38,6 +52,10 @@ function FilterCarousel({ label, options, value, onChange, disabled = false }) {
 
   function selectOption(event, option) {
     event.stopPropagation()
+    if (disabled) {
+      setShowReminder(true)
+      return
+    }
     onChange(option)
   }
 
@@ -70,7 +88,8 @@ function FilterCarousel({ label, options, value, onChange, disabled = false }) {
           onPointerDown=${stopArrowPointer}
           onPointerUp=${stopArrowPointer}
           onClick=${(event) => { event.stopPropagation(); changePage(-1) }}
-          disabled=${disabled || pageCount <= 1}
+          aria-disabled=${disabled}
+          disabled=${pageCount <= 1}
         >
           ‹
         </button>
@@ -81,7 +100,7 @@ function FilterCarousel({ label, options, value, onChange, disabled = false }) {
               type="button"
               className=${`filter-chip${option === value ? ' is-active' : ''}`}
               aria-pressed=${option === value}
-              disabled=${disabled}
+              aria-disabled=${disabled}
               onPointerDown=${(event) => event.stopPropagation()}
               onClick=${(event) => selectOption(event, option)}
             >
@@ -96,12 +115,18 @@ function FilterCarousel({ label, options, value, onChange, disabled = false }) {
           onPointerDown=${stopArrowPointer}
           onPointerUp=${stopArrowPointer}
           onClick=${(event) => { event.stopPropagation(); changePage(1) }}
-          disabled=${disabled || pageCount <= 1}
+          aria-disabled=${disabled}
+          disabled=${pageCount <= 1}
         >
           ›
         </button>
       </div>
       <span className="filter-carousel__count">${page + 1} / ${pageCount}</span>
+      ${showReminder && html`
+        <div className="filter-premium-reminder" role="status">
+          A Spotify Premium account is required to use these filters.
+        </div>
+      `}
     </div>
   `
 }
