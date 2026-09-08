@@ -1,4 +1,5 @@
 import { useState } from 'https://esm.sh/react@19'
+import Flame from './FlameIcon.js'
 import { html } from '../html.js'
 
 function PlayerRow({ player, isHost, onToggleReady }) {
@@ -32,7 +33,7 @@ function PlayerRow({ player, isHost, onToggleReady }) {
   `
 }
 
-export default function FriendLobby({ lobby, onStart, joinCode, onJoin, onBack }) {
+export default function FriendLobby({ lobby, onStart, joinCode, onJoin, onBack, onJoinLobby }) {
   const [joinInput, setJoinInput] = useState(joinCode || '')
 
   const {
@@ -107,6 +108,18 @@ export default function FriendLobby({ lobby, onStart, joinCode, onJoin, onBack }
                 `}
               </div>
             </div>
+
+            ${onJoinLobby && html`
+              <button
+                type="button"
+                className="fl-invite-btn fl-invite-btn--icon"
+                onClick=${onJoinLobby}
+                aria-label="Join lobby"
+                title="Join lobby"
+              >
+                <${Flame} size=${16} strokeWidth=${2} aria-hidden="true" />
+              </button>
+            `}
 
             <div className="friend-lobby__players">
               <${PlayerRow}

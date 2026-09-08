@@ -44,10 +44,49 @@ test('logged-out selection advances and searches the same Deezer provider', asyn
   assert.ok(requests.some((url) => url.startsWith('/api/classic/guest-search?')))
 })
 
-test('guest difficulty progressively includes less-popular songs', async () => {
+test('guest selection respects recently played exclusions at every difficulty', async () => {
   const easy = await fetchClassicTrack({ difficulty: 0, recentIds: ['deezer-2'] })
   const impossible = await fetchClassicTrack({ difficulty: 4, recentIds: ['deezer-1'] })
   assert.equal(easy.popularity, 80)
   assert.equal(impossible.popularity, 120)
   assert.notEqual(impossible.id, easy.id)
+})
+
+test('guest Classic samples low-ranked songs immediately and loads new candidates after four selections', async () => {
+  const savedFetch = globalThis.fetch
+  const savedRandom = Math.random
+  let catalogCalls = 0
+  let catalogSeed
+  const initial = Array.from({ length: 4 }, (_, index) => ({ ...tracks[0], id: `rotation-${index}`, title: `Rotation ${index}`, popularity: 1000 - index * 300 }))
+  const added = { ...tracks[0], id: 'new-addition', title: 'New Addition', popularity: 1 }
+  globalThis.fetch = async (url) => {
+    if (url.startsWith('/api/classic/tracks?')) {
+      catalogCalls++
+      const params = new URL(url, 'http://localhost').searchParams
+      if (catalogCalls === 1) catalogSeed = params.get('catalogSeed')
+      assert.equal(params.get('catalogSeed'), catalogSeed)
+      assert.equal(Number(params.get('catalogOffset')), catalogCalls === 1 ? 0 : 24)
+      return Response.json({ provider: 'deezer', tracks: catalogCalls === 1 ? initial : [added], catalogSeed: Number(catalogSeed), nextOffset: catalogCalls === 1 ? 24 : null })
+    }
+    return savedFetch(url)
+  }
+  Math.random = () => 0.999
+  try {
+    const selected = []
+    for (let i = 0; i < 5; i++) selected.push(await fetchClassicTrack({ genre: 'expanded-catalog', difficulty: 0 }))
+    assert.equal(selected[0].id, 'rotation-3', 'Easy must not force the highest-ranked songs first')
+    assert.equal(new Set(selected.slice(0, 4).map((song) => song.id)).size, 4)
+    assert.equal(selected[4].id, added.id)
+    assert.equal(catalogCalls, 2)
+  } finally {
+    globalThis.fetch = savedFetch
+    Math.random = savedRandom
+  }
+})
+
+test('guest selection exhausts the catalog without caller-supplied recent IDs, then starts another cycle', async () => {
+  const ids = []
+  for (let i = 0; i < 4; i++) ids.push((await fetchClassicTrack({ genre: 'rotation-test', difficulty: 4 })).id)
+  assert.equal(new Set(ids.slice(0, 2)).size, 2)
+  assert.equal(new Set(ids.slice(2, 4)).size, 2)
 })

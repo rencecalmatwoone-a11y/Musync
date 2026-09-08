@@ -33,6 +33,16 @@ and live authentication URLs.
 - Anonymous sign-ins require **Authentication → Settings** →
   enable **Allow anonymous sign-ins**.
 
+### Password recovery
+
+Password reset uses Supabase email recovery and returns to `/?auth=recovery`.
+In **Authentication > URL Configuration**, allow
+`https://your-app-domain/?auth=recovery` and the matching localhost URL for
+development. Keep the recovery email template's `{{ .ConfirmationURL }}` link.
+The app sends the reset email, handles `PASSWORD_RECOVERY`, and calls
+`updateUser({ password })` after the user chooses a new password. Recovery emails
+share Supabase's email-sending quota; configure custom SMTP for production.
+
 ## 3. Enable Realtime
 
 - **Database → Replication**: enable **Realtime** for the tables you want

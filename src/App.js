@@ -174,6 +174,11 @@ export default function App() {
     classicTrack && classicTrack.playbackUrl ? classicTrack.playbackUrl : null,
     classicTrack?.playbackType,
   )
+  const classicStatusMessages = Array.from(new Set([
+    classicPoolError,
+    classicRetryAt ? 'Spotify is cooling down. We\'ll retry automatically when the cooldown ends.' : null,
+    classicAudio.error,
+  ].filter(Boolean)))
 
   async function nextClassicTrack() {
     const generation = classicGenerationRef.current
@@ -360,6 +365,7 @@ export default function App() {
                   onPlaybackPositionChange=${(position) => {
                     classicPlaybackPositionRef.current = Math.max(0, Number(position) || 0)
                   }}
+                  statusMessages=${classicStatusMessages}
                   answerLocked=${classicReveal || classicAnswerLocked}
                   revealActive=${classicReveal}
                   onPractice=${() => { setPracticeLaunchRequested(true); setMode('multiplayer') }}
@@ -369,7 +375,7 @@ export default function App() {
                 />
                 ${classicPoolError && !classicReveal && html`
                   <div className="audio-status" role="status">
-                    ${classicRetryAt ? html`<p>Spotify is cooling down. We’ll retry automatically when the cooldown ends.</p>` : html`
+                    ${!classicRetryAt && html`
                       <button type="button" className="song-reveal__details-btn" disabled=${classicPoolLoading} onClick=${() => classicTrack ? advanceClassicRound() : setClassicRetryVersion((value) => value + 1)}>Retry songs</button>
                     `}
                   </div>

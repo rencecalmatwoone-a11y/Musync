@@ -129,6 +129,7 @@ export default function GameArea({
   answerLocked = false,
   onPractice = null,
   filtersDisabled = false,
+  statusMessages = [],
 }) {
   return html`
     <section className="game-area">
@@ -170,6 +171,7 @@ export default function GameArea({
         revealActive=${revealActive}
         onPractice=${onPractice}
         availablePoints=${availablePoints}
+        statusMessages=${statusMessages}
       />
       <${GuessInput} onSubmit=${onSubmit} feedback=${feedback} disabled=${answerLocked} search=${searchClassicCatalog} availablePoints=${availablePoints} />
     </section>

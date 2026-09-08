@@ -21,6 +21,7 @@ import {
   spotifyDiagnostics,
 } from './services/spotify.js'
 import { resolveVSAudio, searchVSAudioTracks, searchClassicDeezerTracks, vsAudioDiagnostics } from './services/vsAudio.js'
+import { classicGuestCatalogPage } from './services/classicGuestCatalog.js'
 import { sessionStore } from './services/sessionStore.js'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
@@ -391,19 +392,9 @@ async function handleRequest(req, res) {
         sendJson(res, 409, { success: false, provider: 'spotify', error: 'Authenticated Classic must use Spotify.' })
         return
       }
-      let playlistTracks = []
-      if (spotifyConfigured) {
-        try {
-          playlistTracks = await getPublicPlaylistTracks({
-            clientId: SPOTIFY_CLIENT_ID,
-            clientSecret: SPOTIFY_CLIENT_SECRET,
-            playlistIds: CLASSIC_GUEST_PLAYLIST_IDS,
-            limit: 1500,
-          })
-        } catch (error) {
-          console.warn('[Classic] guest playlist lookup unavailable:', error?.message || error)
-        }
-      }
+      const catalogSeed = Number(url.searchParams.get('catalogSeed')) || randomBytes(4).readUInt32BE()
+      const catalogOffset = Number(url.searchParams.get('catalogOffset')) || 0
+      const catalogPage = classicGuestCatalogPage(catalogSeed, catalogOffset)
       const tracks = await searchClassicDeezerTracks({
         genre: url.searchParams.get('genre') || 'Any Genre',
         musicOrigin: url.searchParams.get('musicOrigin') || 'International',
@@ -411,9 +402,10 @@ async function handleRequest(req, res) {
         yearTo: url.searchParams.get('yearTo') || '',
         difficulty: url.searchParams.get('difficulty') || '0',
         limit: url.searchParams.get('limit') || 30,
-        playlistTracks,
+        catalogSeed,
+        catalogOffset,
       })
-      sendJson(res, 200, { success: true, provider: 'deezer', tracks })
+      sendJson(res, 200, { success: true, provider: 'deezer', tracks, catalogSeed, nextOffset: catalogPage.nextOffset, catalogTotal: catalogPage.total })
     } catch (error) {
       sendJson(res, 502, { success: false, provider: 'deezer', error: error?.message || 'Guest Classic catalog failed.' })
     }

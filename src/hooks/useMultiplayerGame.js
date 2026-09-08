@@ -366,9 +366,19 @@ export default function useMultiplayerGame(displayName = 'Elite Listener') {
     roundFiltersRef.current = { genre, era, difficulty }
     nextPoolOffsetRef.current = 10
     poolErrorRef.current = null
+    if (vsAi) {
+      // Practice uses the public catalog directly, without Spotify availability or auth.
+      const tracks = await fetchVSAudioTracks({ genre, ...eraToYears(era), limit: 30 })
+      if (generation !== generationRef.current) return []
+      setActivePool(tracks)
+      songBagRef.current = []
+      recentSongsRef.current = []
+      return tracks
+    }
     let allowGuestFallback = false
     try {
-      allowGuestFallback = !(await getSpotifyAuthStatus()).authed
+      // Solo practice can always use public previews, regardless of account state.
+      allowGuestFallback = vsAi || !(await getSpotifyAuthStatus()).authed
       const { yearFrom, yearTo } = eraToYears(era)
       const tracks = await fetchTracks({ genre, yearFrom, yearTo, difficulty, limit: vsAi ? 10 : 120, offset: 0, allowPartial: vsAi, ...(vsAi ? { timeoutMs: 8000 } : {}) })
       if (generation !== generationRef.current) return []

@@ -1,3 +1,7 @@
+import { GUEST_TRACKS } from './guestTrackList.js'
+import { CLASSIC_GUEST_TRACKS } from './classicGuestTrackList.js'
+import { classicGuestCatalogPage } from './classicGuestCatalog.js'
+
 const DEEZER_SEARCH_URL = 'https://api.deezer.com/search/track'
 const RESOLUTION_TIMEOUT_MS = 5000
 const CACHE_TTL_MS = 30 * 60 * 1000
@@ -111,10 +115,35 @@ export function vsAudioDiagnostics() {
   return { entries: previewCache.size, provider: 'deezer' }
 }
 
+function shuffledTracks(tracks) {
+  const shuffled = [...tracks]
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
+  }
+  return shuffled
+}
+
+async function searchRequestedGuestTracks(catalog = GUEST_TRACKS, firstMatchOnly = false) {
+  // Bound catalog work per request and rotate through the full supplied list.
+  const unique = [...new Map(catalog.map((track) => [`${normalize(track.artist).split(' and ')[0]}|${normalize(track.title)}`, track])).values()]
+  const shuffled = shuffledTracks(unique)
+  const results = await Promise.allSettled(shuffled.slice(0, 24).map(async (track) => {
+    const params = new URLSearchParams({ q: `${track.artist} ${track.title}`, limit: '5' })
+    const response = await fetch(`${DEEZER_SEARCH_URL}?${params}`, { signal: AbortSignal.timeout(RESOLUTION_TIMEOUT_MS) })
+    if (!response.ok) return []
+    const data = await response.json()
+    const matches = (data.data || []).filter((result) => result.preview && sameRecording({ artistName: result.artist?.name, trackName: result.title }, track))
+    return firstMatchOnly ? matches.slice(0, 1) : matches
+  }))
+  return results.flatMap((result) => result.status === 'fulfilled' ? result.value : [])
+}
+
 export async function searchVSAudioTracks(genre = 'Any Genre', limit = 30) {
   const requestedLimit = Math.min(Math.max(Number(limit) || 30, 1), 1500)
   const deezerSearchLimit = Math.min(requestedLimit, 100)
   const queries = [...FEATURED_VS_ARTISTS, genre && genre !== 'Any Genre' ? String(genre) : 'music']
+  const requestedTracks = searchRequestedGuestTracks()
   const responses = await Promise.allSettled(queries.map(async (query) => {
     const params = new URLSearchParams({ q: query, limit: String(requestedLimit) })
     const response = await fetch(`${DEEZER_SEARCH_URL}?${params}`, { signal: AbortSignal.timeout(RESOLUTION_TIMEOUT_MS) })
@@ -126,7 +155,7 @@ export async function searchVSAudioTracks(genre = 'Any Genre', limit = 30) {
     .filter((track) => track.id && track.title && track.artist?.name && track.preview)
     .map((track) => [track.id, track])).values()]
   const featured = FEATURED_VS_ARTISTS.flatMap((artist) => unique.filter((track) => normalize(track.artist?.name) === normalize(artist)).slice(0, 3))
-  const ordered = [...new Map([...featured, ...unique].map((track) => [track.id, track])).values()]
+  const ordered = [...new Map([...(await requestedTracks), ...featured, ...unique].map((track) => [track.id, track])).values()]
   return ordered
     .slice(0, requestedLimit)
     .map((track, index) => {
@@ -153,7 +182,9 @@ export async function searchVSAudioTracks(genre = 'Any Genre', limit = 30) {
         external_urls: {},
         source: 'vs-audio-catalog',
         playbackType: 'preview',
-        playbackUrl: null,
+        playbackUrl: `/api/audio-preview?url=${encodeURIComponent(track.preview)}`,
+        previewProvider: 'deezer',
+        previewDuration: 30000,
         spotifyPreviewUrl: null,
       }
     })
@@ -186,7 +217,23 @@ function deezerTrackToClassic(track, genre = 'Any Genre', musicOrigin = 'Interna
   }
 }
 
-export async function searchClassicDeezerTracks({ genre = 'Any Genre', musicOrigin = 'International', yearFrom, yearTo, difficulty = 0, limit = 30, query = '', playlistTracks = [] } = {}) {
+export async function searchClassicDeezerTracks({ genre = 'Any Genre', musicOrigin = 'International', yearFrom, yearTo, difficulty = 0, limit = 30, query = '', playlistTracks = [], catalogSeed, catalogOffset = 0 } = {}) {
+  if (!query && musicOrigin !== 'OPM' && catalogSeed !== undefined) {
+    const page = classicGuestCatalogPage(catalogSeed, catalogOffset)
+    const matches = await searchRequestedGuestTracks(page.songs, true)
+    const unique = [...new Map(matches.map((track) => [track.id, track])).values()]
+    await Promise.all(unique.map(async (track) => {
+      if (!track.release_date && !track.album?.release_date) {
+        const date = await getDeezerAlbumReleaseDate(track.album?.id)
+        if (date) track.release_date = date
+      }
+    }))
+    return shuffledTracks(unique.filter((track) => {
+      const year = Number(String(track.album?.release_date || track.release_date || '').slice(0, 4))
+      return (!yearFrom || year >= Number(yearFrom)) && (!yearTo || year <= Number(yearTo))
+    })).slice(0, Number(limit) || 30).map((track) => deezerTrackToClassic(track, genre, musicOrigin, difficulty))
+  }
+  const requestedTracks = !query && musicOrigin !== 'OPM' ? searchRequestedGuestTracks([...GUEST_TRACKS, ...CLASSIC_GUEST_TRACKS]) : Promise.resolve([])
   const requestedLimit = Math.min(Math.max(Number(limit) || 30, 1), 1500)
   const deezerSearchLimit = Math.min(requestedLimit, 100)
   const playlistQueries = musicOrigin === 'OPM' ? [] : playlistTracks
@@ -217,9 +264,10 @@ export async function searchClassicDeezerTracks({ genre = 'Any Genre', musicOrig
         const artist = normalizeArtistName(track.artist?.name)
         return artist === wanted || artist.includes(wanted) || wanted.includes(artist)
       })
-      return [{ term, tracks: matches.slice(0, 4) }]
+      return [{ term, tracks: shuffledTracks(matches).slice(0, 4) }]
     })
-  const tracks = [...new Map(artistResults.flatMap(({ tracks: results }) => results)
+  const suppliedTracks = await requestedTracks
+  const tracks = [...new Map([...suppliedTracks, ...artistResults.flatMap(({ tracks: results }) => results)]
     .filter((track) => track.id && track.title && track.artist?.name && track.preview)
     .filter((track) => !/\b(top 40|greatest hits|best of|karaoke|instrumental|tribute|cover band)\b/i.test(track.artist.name))
     .map((track) => [track.id, track])).values()]
@@ -247,11 +295,9 @@ export async function searchClassicDeezerTracks({ genre = 'Any Genre', musicOrig
     ? filtered
     : [...new Map([...CLASSIC_ARTISTS.flatMap((artist) => filtered
       .filter((track) => normalizeArtistName(track.artist?.name).includes(normalizeArtistName(artist)))
-      .sort((a, b) => Number(b.rank || 0) - Number(a.rank || 0))
       .slice(0, 3)
-      .map((track) => [track.id, track])), ...playlistResults.map((track) => [track.id, track])]).values()]
-  return balanced
-    .sort((a, b) => Number(b.rank || 0) - Number(a.rank || 0))
+      .map((track) => [track.id, track])), ...suppliedTracks.filter((track) => filtered.includes(track)).map((track) => [track.id, track]), ...playlistResults.map((track) => [track.id, track])]).values()]
+  return (query ? balanced : shuffledTracks(balanced))
     .slice(0, requestedLimit)
     .map((track) => deezerTrackToClassic(track, genre, musicOrigin, difficulty))
 }

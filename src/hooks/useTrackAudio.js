@@ -221,6 +221,7 @@ async function initializeSpotifyPlayer() {
         playback.rejectedToken = sdkToken || playback.token
         if (playback.token === playback.rejectedToken) playback.tokenExpiresAt = 0
         const error = new Error(`Spotify authentication failed: ${message}`)
+        error.code = 'SPOTIFY_SDK_AUTH_ERROR'
         publishPlayback({ status: 'error', error: error.message })
         if (playback.readyReject) playback.readyReject(error)
       })
@@ -393,7 +394,16 @@ export function useSpotifyPlayback(enabled = true) {
     return promise
   }, [])
 
-  const ensureReady = useCallback(() => initializeSpotifyPlayer(), [])
+  const ensureReady = useCallback(async () => {
+    try {
+      return await initializeSpotifyPlayer()
+    } catch (error) {
+      // The SDK can reject a token before its reported expiry. Initialization
+      // already invalidates that token; reconnect once with refreshed credentials.
+      if (error.code !== 'SPOTIFY_SDK_AUTH_ERROR') throw error
+      return initializeSpotifyPlayer()
+    }
+  }, [])
 
   const activateElement = useCallback(() => {
     if (playback.player && typeof playback.player.activateElement === 'function') {

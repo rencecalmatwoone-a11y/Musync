@@ -80,7 +80,7 @@ export default function SongReveal({
     <div className="song-reveal-backdrop">
     <div className="song-reveal" role="dialog" aria-modal="true" aria-label="Round answer">
       <div className="song-reveal__badge">
-        <span className="song-reveal__round">IT WAS ...</span>
+        <span className="song-reveal__round">ROUND REVEAL</span>
         <span className=${`song-reveal__points${isCorrectAnswer ? ' is-earned' : ''}`}>
           ${isCorrectAnswer ? `+${points} PTS` : 'ROUND MISSED'}
         </span>
@@ -124,8 +124,8 @@ export default function SongReveal({
       </div>
 
       <div className="song-reveal__actions">
-        ${nextError && html`<p className="audio-status" role="status">${nextError} ${nextRetryAt ? 'We’ll retry automatically after the cooldown.' : ''}</p>`}
-        ${nextLoading && html`<p className="audio-status" role="status">Loading the next song…</p>`}
+        ${nextError && html`<p className="audio-status song-reveal__next-status" role="status">${nextError} ${nextRetryAt ? 'We’ll retry automatically after the cooldown.' : ''}</p>`}
+        ${nextLoading && html`<p className="audio-status song-reveal__next-status" role="status">Loading the next song…</p>`}
         <button type="button" className="song-reveal__continue" onClick=${onContinue} disabled=${nextLoading || Boolean(nextRetryAt)}>
           ${classicMode ? 'NEXT ROUND →' : round >= totalRounds ? 'VIEW FINAL RESULTS →' : `NEXT ROUND${countdown !== null ? ` IN ${countdown}` : ''} →`}
         </button>

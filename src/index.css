@@ -825,16 +825,17 @@ button:focus-visible {
 }
 
 .spotify-modal {
-  width: min(100%, 380px);
-  padding: 26px;
-  border: 1px solid var(--border-soft);
-  border-radius: 16px;
-  background: var(--bg-panel);
+  width: min(100%, 420px);
+  padding: 28px;
+  border: 1px solid #4a463c;
+  border-top: 3px solid var(--yellow);
+  border-radius: 12px;
+  background: linear-gradient(145deg, #201f1e 0%, var(--bg-panel) 62%);
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 13px;
   color: var(--cream);
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.38);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.46), 0 0 0 1px rgba(250, 204, 21, 0.05);
   animation: spotify-modal-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
@@ -861,15 +862,17 @@ button:focus-visible {
 .spotify-modal__eyebrow {
   margin: 0;
   color: var(--yellow);
-  font-size: 11px;
-  letter-spacing: 0.22em;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
 }
 
 .spotify-modal h2 {
   margin: 0;
   color: var(--cream);
-  font-size: 20px;
-  letter-spacing: 0.08em;
+  font-size: 21px;
+  letter-spacing: 0.01em;
+  line-height: 1.15;
 }
 
 .spotify-modal p:not(.spotify-modal__eyebrow) {
@@ -882,8 +885,8 @@ button:focus-visible {
 .spotify-modal__actions {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin-top: 6px;
+  gap: 9px;
+  margin-top: 8px;
 }
 
 .spotify-modal__actions .auth-btn {
@@ -900,7 +903,7 @@ button:focus-visible {
 
 .spotify-modal__button-row {
   display: flex;
-  gap: 10px;
+  gap: 8px;
 }
 
 .spotify-modal__button-row .auth-btn {
@@ -909,21 +912,20 @@ button:focus-visible {
 
 .spotify-modal__practice {
   width: 100%;
-  padding: 8px 12px;
-  border: 0;
-  background: transparent;
-  color: var(--cream-muted);
+  padding: 9px 12px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: rgba(250, 204, 21, 0.06);
+  color: var(--yellow);
   font: inherit;
   font-size: 11px;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
 }
 
-.spotify-modal__practice {
-  color: var(--yellow);
-}
-
-.spotify-modal__practice:hover {
+.spotify-modal__practice:hover:not(:disabled) {
   color: var(--cream);
+  border-color: rgba(250, 204, 21, 0.35);
+  background: rgba(250, 204, 21, 0.1);
 }
 
 .audio-player {
@@ -3120,6 +3122,12 @@ button:focus-visible {
   gap: 10px;
 }
 
+.song-reveal__next-status {
+  flex: 0 0 100%;
+  width: 100%;
+  margin: 0 0 2px;
+}
+
 .song-reveal__details-btn {
   padding: 13px 20px;
   border: 1px solid var(--border-soft);
@@ -3558,6 +3566,12 @@ button:focus-visible {
 .fl-invite-btn:hover {
   border-color: var(--yellow);
   background: rgba(var(--dc-rgb), 0.06);
+}
+
+.fl-invite-btn--icon {
+  display: grid;
+  width: 100%;
+  place-items: center;
 }
 
 .fl-start-btn {
@@ -4122,27 +4136,31 @@ button:focus-visible {
 .auth-modal {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: rgba(8, 8, 8, 0.78);
+  backdrop-filter: blur(8px);
   display: grid;
   place-items: center;
   z-index: 50;
-  padding: 20px;
+  padding: 24px;
 }
 .auth-modal__card {
-  width: min(100%, 380px);
-  background: var(--bg-panel);
-  border: 1px solid var(--border-soft);
-  border-radius: 16px;
-  padding: 26px;
+  width: min(100%, 408px);
+  background: linear-gradient(145deg, #201f1e 0%, var(--bg-panel) 62%);
+  border: 1px solid #4a463c;
+  border-top: 3px solid var(--yellow);
+  border-radius: 12px;
+  padding: 30px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.46), 0 0 0 1px rgba(250, 204, 21, 0.05);
 }
 .auth-modal__card h2 {
   margin: 0;
   color: var(--cream);
-  font-size: 20px;
-  letter-spacing: 0.08em;
+  font-size: 22px;
+  letter-spacing: 0.1em;
+  line-height: 1.1;
 }
 .auth-modal__card p {
   color: var(--gray);
@@ -4157,13 +4175,15 @@ button:focus-visible {
 }
 .auth-tabs {
   display: flex;
-  gap: 6px;
+  border-bottom: 1px solid var(--gray-line);
+  margin: 2px 0 2px;
 }
 .auth-tab {
   flex: 1;
-  padding: 9px;
-  border: 1px solid var(--border-soft);
-  border-radius: 9px;
+  padding: 10px 4px 11px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
   background: transparent;
   color: var(--gray);
   font-size: 11px;
@@ -4171,22 +4191,41 @@ button:focus-visible {
   cursor: pointer;
 }
 .auth-tab.is-active {
-  border-color: var(--yellow);
+  border-bottom-color: var(--yellow);
   color: var(--yellow);
 }
+.auth-modal__card form { display: grid; gap: 14px; }
+.auth-forgot {
+  align-self: flex-end;
+  margin-top: -8px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--cream-muted);
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  box-shadow: none;
+}
+.auth-forgot:hover:not(:disabled) { color: var(--cream); box-shadow: none; }
+.auth-forgot:focus-visible { outline: 2px solid var(--yellow); outline-offset: 4px; }
+.auth-forgot:disabled { opacity: .5; cursor: wait; }
+
 .auth-field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  font-size: 11px;
-  letter-spacing: 0.1em;
+  gap: 7px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
   color: var(--gray);
 }
 .auth-field input {
-  padding: 11px 12px;
+  min-height: 44px;
+  padding: 11px 13px;
   border: 1px solid var(--border-soft);
-  border-radius: 9px;
-  background: var(--bg-center);
+  border-radius: 7px;
+  background: rgba(12, 12, 12, 0.34);
   color: var(--cream);
   font-size: 14px;
   animation: none;
@@ -4207,9 +4246,10 @@ button:focus-visible {
 }
 .auth-btn {
   width: 100%;
-  padding: 12px;
+  min-height: 44px;
+  padding: 12px 14px;
   border: 1px solid var(--yellow);
-  border-radius: 10px;
+  border-radius: 7px;
   background: var(--yellow);
   color: #111;
   font-weight: 700;
@@ -4218,19 +4258,21 @@ button:focus-visible {
   cursor: pointer;
 }
 .auth-btn--ghost {
-  background: var(--bg-center);
-  color: var(--cream);
+  background: transparent;
+  color: var(--cream-muted);
   border-color: var(--border-soft);
 }
 .auth-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 8px;
+  padding-top: 2px;
 }
 .auth-actions .auth-btn {
   min-width: 0;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
 }
 .auth-error {
   color: var(--crimson) !important;

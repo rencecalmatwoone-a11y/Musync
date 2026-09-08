@@ -195,8 +195,25 @@ export default function useOnlineLobby({ user, profile, poolFilters }) {
 
       const { genre, era, difficulty } = poolFilters || {}
       const { yearFrom, yearTo } = eraToYears(era)
-      const tracks = await fetchTracks({ genre, yearFrom, yearTo, difficulty, limit: 120, offset: 0 })
-      const pool = Array.isArray(tracks) ? tracks : []
+      const pool = []
+      const seenTrackIds = new Set()
+      const loadTracks = async (filters) => {
+        const tracks = await fetchTracks({ ...filters, difficulty, limit: 120, offset: 0 })
+        for (const track of Array.isArray(tracks) ? tracks : []) {
+          if (track?.id && !seenTrackIds.has(track.id)) {
+            seenTrackIds.add(track.id)
+            pool.push(track)
+          }
+        }
+      }
+
+      await loadTracks({ genre, yearFrom, yearTo })
+      if (pool.length < 10 && genre && genre !== 'Any Genre') {
+        await loadTracks({ genre: 'Any Genre', yearFrom, yearTo })
+      }
+      if (pool.length < 10 && (yearFrom || yearTo)) {
+        await loadTracks({ genre: 'Any Genre' })
+      }
       if (pool.length < 10) throw new Error('Spotify returned fewer than 10 tracks for this match.')
       setActivePool(pool)
       const songOrder = pickWeightedTracks(pool, 10)

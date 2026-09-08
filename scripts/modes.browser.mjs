@@ -79,7 +79,10 @@ function session() {
 async function request(data) { return (await fetch('/test/db', { method: 'POST', body: JSON.stringify({ ...data, user: user.id }) })).json() }
 const client = {
   auth: {
-    getSession: async () => ({ data: { session: session() } }),
+    getSession: async () => {
+      if (new URLSearchParams(location.search).get('auth') === 'recovery' && session()) authListener?.('PASSWORD_RECOVERY', session());
+      return { data: { session: session() } };
+    },
     onAuthStateChange: (callback) => { authListener = callback; return { data: { subscription: { unsubscribe() { authListener = null } } } } },
     signInWithPassword: async ({ password }) => {
       if (password === 'incorrect') return { data: {}, error: { message: 'Invalid login credentials' } };
@@ -94,6 +97,16 @@ const client = {
         return { data: {}, error: { code: 'over_email_send_rate_limit', message: 'email rate limit exceeded' } };
       }
       return { data: { user, session: null }, error: null };
+    },
+    resetPasswordForEmail: async (email, options) => {
+      window.__testResetRequests = [...(window.__testResetRequests || []), { email, redirectTo: options.redirectTo }];
+      if (email === 'limited@example.test') return { error: { code: 'over_email_send_rate_limit', message: 'email rate limit exceeded' } };
+      return { data: {}, error: null };
+    },
+    updateUser: async ({ password }) => {
+      window.__testPasswordUpdates = (window.__testPasswordUpdates || 0) + 1;
+      if (password === 'rejected-password') return { error: { message: 'Please choose a stronger password.' } };
+      return { data: { user }, error: null };
     },
     signOut: async () => { localStorage.setItem('test-email-session', 'signed_out'); authListener?.('SIGNED_OUT', null); return { error: null } },
   },
@@ -216,6 +229,7 @@ async function newPage(user = 'host', mode = 'multiplayer', failure = null, auth
       if (url.pathname === '/api/classic/guest-search') return reply({ provider: 'deezer', tracks })
       if (mode === 'classic' && (/spotify|catalog/.test(url.pathname) || url.hostname === 'api.spotify.com')) throw new Error('Classic requested Spotify: ' + url.pathname)
       if (url.pathname === '/api/spotify/eligibility') throw new Error('Playback must not depend on profile eligibility')
+      if (url.pathname === '/api/spotify/playback-token' && failure === 'scopes') return reply({ code: 'SPOTIFY_SCOPE_REQUIRED', error: 'Reconnect Spotify to grant the required playback permissions.' }, 403)
       if (url.pathname === '/api/spotify/playback-token') return reply({ accessToken: 'fixture', expiresAt: Date.now() + 3600000 })
       if (url.pathname === '/api/spotify/tracks') {
         if (mode === 'classic') assert.equal(url.searchParams.get('mode'), 'classic')
@@ -253,7 +267,7 @@ async function newPage(user = 'host', mode = 'multiplayer', failure = null, auth
     if (url.origin === base) return route.continue()
     return route.abort()
   })
-  await page.goto(`${base}/?user=${user}`)
+  await page.goto(`${base}/?user=${user}${authOptions.recovery ? '&auth=recovery' : ''}`)
   await page.waitForFunction(() => window.__game)
   return { page, context, requests }
 }
@@ -278,7 +292,92 @@ async function layout(page) {
   await page.setViewportSize({ width: 1440, height: 1000 })
 }
 try {
-  if (process.argv.includes('--friends-auth-only')) {
+  if (process.argv.includes('--render-only')) {
+    const classic = await newPage('render-classic', 'classic')
+    await classic.page.getByText('HOW WELL DO YOU KNOW YOUR MUSIC?', { exact: true }).waitFor()
+    await classic.page.locator('.stats-panel').waitFor()
+    await classic.context.close()
+    const multiplayer = await newPage('render-multiplayer')
+    await practice(multiplayer.page)
+    await multiplayer.page.locator('.choice-btn').first().waitFor()
+    await multiplayer.context.close()
+    const friends = await newPage('render-friends')
+    await friends.page.getByRole('button').filter({ hasText: 'PLAY WITH FRIENDS' }).click()
+    await friends.page.getByRole('button', { name: /CREATE A NEW LOBBY/ }).waitFor()
+    await friends.context.close()
+    assert.deepEqual(errors, [])
+    console.log('PASS: Classic, VS AI and friends lobby render in a real browser without startup errors')
+  } else if (process.argv.includes('--friends-playback-only')) {
+    const host = await newPage('host', 'multiplayer', 'scopes')
+    const guest = await newPage('guest')
+    for (const p of [host, guest]) await p.page.getByRole('button').filter({ hasText: 'PLAY WITH FRIENDS' }).click()
+    await host.page.getByRole('button', { name: /CREATE A NEW LOBBY/ }).click()
+    await guest.page.getByPlaceholder('ENTER 6-CHAR CODE').fill('ABCDEF')
+    await guest.page.getByRole('button', { name: 'JOIN', exact: true }).click()
+    for (const p of [host, guest]) await p.page.getByRole('button', { name: 'MARK READY', exact: true }).click()
+    await host.page.getByRole('button', { name: /START MATCH/ }).click()
+    const modal = host.page.getByRole('dialog', { name: 'Connect Spotify' })
+    await modal.getByRole('link', { name: 'Continue with Spotify' }).waitFor()
+    assert.equal(await modal.getByRole('button', { name: 'Try Again' }).count(), 0)
+    // Lobby polling must not trigger further player initialization or starts.
+    await host.page.clock.install()
+    await host.page.clock.runFor(6000)
+    assert.equal(host.requests.filter((url) => url.includes('/api/spotify/playback-token')).length, 1)
+    assert.equal(rpcLog.filter((r) => r.name === 'start_match').length, 0)
+    await modal.getByRole('button', { name: 'Back', exact: true }).click()
+    await host.page.clock.runFor(3000)
+    assert.equal(await host.page.locator('.spotify-modal').count(), 0)
+    assert.deepEqual(errors, [])
+    console.log('PASS: logged-in private lobby with missing playback permissions offers reconnect, makes one request, and keeps the popup dismissed after Back')
+    await host.context.close(); await guest.context.close()
+  } else if (process.argv.includes('--password-reset-only')) {
+    const reset = await newPage('password-reset', 'multiplayer', null, { emailSession: 'signed_out', spotifyAuthed: false });
+    await reset.page.getByRole('button').filter({ hasText: 'PLAY WITH FRIENDS' }).click();
+    await reset.page.getByRole('button', { name: 'Forgot password?', exact: true }).click();
+    const forgot = reset.page.getByRole('dialog', { name: 'Reset your password' });
+    await forgot.getByRole('button', { name: 'Send reset link' }).click();
+    assert.equal(await reset.page.evaluate(() => window.__testResetRequests?.length || 0), 0, 'Empty emails must not send requests');
+    await forgot.getByRole('textbox', { name: 'EMAIL', exact: true }).fill('limited@example.test');
+    await forgot.getByRole('button', { name: 'Send reset link' }).click();
+    await forgot.getByRole('alert').filter({ hasText: 'Password-reset emails are temporarily limited' }).waitFor();
+    await forgot.getByRole('textbox', { name: 'EMAIL', exact: true }).fill('player@example.test');
+    await forgot.getByRole('button', { name: 'Send reset link' }).click();
+    await forgot.getByRole('status').filter({ hasText: 'If an account exists' }).waitFor();
+    const resetRequest = await reset.page.evaluate(() => window.__testResetRequests.at(-1));
+    assert.deepEqual(resetRequest, { email: 'player@example.test', redirectTo: `${base}/?auth=recovery` });
+    assert.equal(await reset.page.locator('.spotify-modal, .friend-lobby').count(), 0);
+    await forgot.getByRole('button', { name: 'Back to sign in' }).click();
+    await reset.page.getByText('PLAYER SIGN IN', { exact: true }).waitFor();
+    console.log('PASS: Forgot password validates email, sends a reset link, explains email limits, and returns to sign-in');
+    await reset.context.close();
+
+    const recovery = await newPage('recovery', 'classic', null, { recovery: true });
+    const dialog = recovery.page.getByRole('dialog', { name: 'Set a new password' });
+    await dialog.waitFor();
+    await dialog.getByLabel('NEW PASSWORD', { exact: true }).fill('new-fixture-password');
+    await dialog.getByLabel('CONFIRM PASSWORD', { exact: true }).fill('different-password');
+    await dialog.getByRole('button', { name: 'Update password' }).click();
+    await dialog.getByRole('alert').filter({ hasText: 'Passwords do not match' }).waitFor();
+    assert.equal(await recovery.page.evaluate(() => window.__testPasswordUpdates || 0), 0);
+    for (const label of ['NEW PASSWORD', 'CONFIRM PASSWORD']) await dialog.getByLabel(label, { exact: true }).fill('rejected-password');
+    await dialog.getByRole('button', { name: 'Update password' }).click();
+    await dialog.getByRole('alert').filter({ hasText: 'Please choose a stronger password' }).waitFor();
+    for (const label of ['NEW PASSWORD', 'CONFIRM PASSWORD']) await dialog.getByLabel(label, { exact: true }).fill('new-fixture-password');
+    await dialog.getByRole('button', { name: 'Update password' }).click();
+    await recovery.page.getByRole('dialog', { name: 'Password updated' }).getByRole('button', { name: 'Continue' }).click();
+    assert.equal(new URL(recovery.page.url()).searchParams.has('auth'), false);
+    assert.equal(await recovery.page.getByRole('dialog').count(), 0);
+    console.log('PASS: recovery callback opens globally, validates matching passwords, handles provider errors, and saves the new password');
+    await recovery.context.close();
+
+    const expired = await newPage('expired-recovery', 'multiplayer', null, { emailSession: 'signed_out', recovery: true });
+    await expired.page.getByRole('dialog', { name: 'Set a new password' }).getByRole('alert').filter({ hasText: 'expired or is invalid' }).waitFor();
+    assert.equal(await expired.page.getByRole('button', { name: 'Update password' }).count(), 0);
+    await expired.page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
+    console.log('PASS: expired recovery links cannot submit a password change');
+    await expired.context.close();
+    assert.deepEqual(errors, []);
+  } else if (process.argv.includes('--friends-auth-only')) {
     const openFriends = (page) => page.getByRole('button').filter({ hasText: 'PLAY WITH FRIENDS' }).click();
     const signIn = async (page, password = 'fixture-password') => {
       await page.locator('.auth-modal input[type="email"]').fill('player@example.test');
@@ -454,6 +553,8 @@ try {
   await guest.page.getByRole('button', { name: 'JOIN', exact: true }).click()
   for (const p of [host, guest]) await p.page.getByRole('button', { name: 'MARK READY', exact: true }).click()
   await host.page.getByRole('button', { name: /START MATCH/ }).click()
+  await host.page.getByText('Spotify player initialization failed: Fixture device failure after connect', { exact: true }).waitFor()
+  assert.equal(rpcLog.filter((r) => r.name === 'start_match').length, 0)
   await host.page.getByRole('button', { name: 'Try Again' }).click()
   for (const p of [host, guest]) await p.page.waitForFunction(() => window.__game.onlineGame.song)
   for (let round = 1; round <= 10; round++) {

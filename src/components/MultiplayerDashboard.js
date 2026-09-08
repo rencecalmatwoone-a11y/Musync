@@ -58,6 +58,8 @@ export default function MultiplayerDashboard({
   const [aiDifficulty, setAiDifficulty] = useState(0)
   const [practiceStarting, setPracticeStarting] = useState(false)
   const [spotifyGateState, setSpotifyGateState] = useState(null)
+  const [spotifyGateError, setSpotifyGateError] = useState(null)
+  const matchLaunchRef = useRef(null)
   const [spotifyAuthed, setSpotifyAuthed] = useState(null)
   const [friendsRequested, setFriendsRequested] = useState(() => {
     try { return sessionStorage.getItem('musync-friends-intent') === '1' } catch { return false }
@@ -80,6 +82,7 @@ export default function MultiplayerDashboard({
   const handlePlayOnline = () => openFriends()
 
   const cancelFriendsEntry = () => {
+    matchLaunchRef.current = null
     setFriendsRequested(false)
     setShowAuth(false)
     setSpotifyGateState(null)
@@ -189,22 +192,33 @@ export default function MultiplayerDashboard({
 
   const mapSpotifyError = (error) => error.code === 'SPOTIFY_PREMIUM_REQUIRED'
     ? 'premium-required'
-    : error.code === 'SPOTIFY_LOGIN_REQUIRED'
+    : ['SPOTIFY_LOGIN_REQUIRED', 'SPOTIFY_SCOPE_REQUIRED', 'SPOTIFY_SDK_AUTH_ERROR'].includes(error.code)
       ? 'login-required'
       : error.code === 'SPOTIFY_QUOTA_EXCEEDED' || /quota/i.test(error.message || '')
         ? 'quota-exceeded'
         : 'error'
 
   const launchMatch = async (startMatch) => {
+    if (matchLaunchRef.current) return
+    const launch = {}
+    matchLaunchRef.current = launch
+    setSpotifyGateError(null)
     setSpotifyGateState('connecting')
     try {
       await spotify.ensureReady()
-      setSpotifyGateState(null)
+      if (matchLaunchRef.current !== launch) return
       await startMatch()
+      if (matchLaunchRef.current === launch) setSpotifyGateState(null)
     } catch (error) {
+      if (matchLaunchRef.current !== launch) return
+      setSpotifyGateError(error.message)
       setSpotifyGateState(mapSpotifyError(error))
+    } finally {
+      if (matchLaunchRef.current === launch) matchLaunchRef.current = null
     }
   }
+
+  useEffect(() => () => { matchLaunchRef.current = null }, [])
 
   const goToPractice = () => {
     cancelFriendsEntry()
@@ -367,11 +381,13 @@ export default function MultiplayerDashboard({
               onJoin=${(c) => online.joinRoom(c)}
               onStart=${() => launchMatch(online.startMatch)}
               onBack=${() => { if (onPracticeStateChange) onPracticeStateChange(false); setScreen('menu') }}
+              onJoinLobby=${() => { online.leave(); setScreen('friends') }}
             />
           `}
 
           <${SpotifyPlaybackModal}
             state=${emailAuthed && (screen === 'friends' || friendsRequested) ? spotifyGateState : null}
+            error=${spotifyGateError}
             onRetry=${() => launchMatch(online.startMatch)}
             onBack=${cancelFriendsEntry}
             onLogin=${rememberFriendsEntry}
@@ -390,7 +406,7 @@ export default function MultiplayerDashboard({
             />
           `}
 
-          ${showAuth && html`<${AuthPanel} auth=${auth} displayName=${displayName} onClose=${cancelFriendsEntry} onAuthenticated=${() => setShowAuth(false)} onDisplayNameChange=${onDisplayNameChange} />`}
+          ${showAuth && !auth.recovering && html`<${AuthPanel} auth=${auth} displayName=${displayName} onClose=${cancelFriendsEntry} onAuthenticated=${() => setShowAuth(false)} onDisplayNameChange=${onDisplayNameChange} />`}
           ${screen === 'friends' && online.error && html`<p className="mp-err">${online.error}</p>`}
         </div>
       `
@@ -578,7 +594,7 @@ export default function MultiplayerDashboard({
             `}
           </div>
         </div>
-          ${showAuth && html`<${AuthPanel} auth=${auth} displayName=${displayName} onClose=${cancelFriendsEntry} onAuthenticated=${() => setShowAuth(false)} onDisplayNameChange=${onDisplayNameChange} />`}
+          ${showAuth && !auth.recovering && html`<${AuthPanel} auth=${auth} displayName=${displayName} onClose=${cancelFriendsEntry} onAuthenticated=${() => setShowAuth(false)} onDisplayNameChange=${onDisplayNameChange} />`}
 
         ${screen === 'menu' && html`
           <${MultiplayerMenu}
@@ -597,6 +613,7 @@ export default function MultiplayerDashboard({
 
         <${SpotifyPlaybackModal}
           state=${emailAuthed && (screen === 'friends' || friendsRequested) ? spotifyGateState : null}
+          error=${spotifyGateError}
           onRetry=${handleStart}
           onBack=${cancelFriendsEntry}
           onLogin=${rememberFriendsEntry}
