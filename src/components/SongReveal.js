@@ -25,8 +25,11 @@ export default function SongReveal({
 }) {
   const [showDetails, setShowDetails] = useState(false)
   const [reviewSong, setReviewSong] = useState(song)
-  const [triviaText, setTriviaText] = useState(song?.fact || '')
+  const [triviaText, setTriviaText] = useState('')
   const [resolvedSpotify, setResolvedSpotify] = useState(null)
+  const [shareStatus, setShareStatus] = useState('')
+  const [sharing, setSharing] = useState(false)
+  const [manualShareUrl, setManualShareUrl] = useState('')
   const detailsRequestRef = useRef(null)
   const audio = usePreviewAudio()
   const prefs = audio.attach
@@ -45,17 +48,16 @@ export default function SongReveal({
 
   useEffect(() => {
     setReviewSong(song)
+    setShareStatus('')
+    setManualShareUrl('')
     setShowDetails(false)
-    setTriviaText(song?.fact || '')
+    setTriviaText('')
     detailsRequestRef.current = null
-    if (!song?.fact) {
-      let alive = true
-      fetchTrackTrivia(song).then((fact) => {
-        if (alive && fact) setTriviaText(fact)
-      })
-      return () => { alive = false }
-    }
-    return undefined
+    let alive = true
+    fetchTrackTrivia(song).then((fact) => {
+      if (alive) setTriviaText(fact || 'No song-specific trivia found for this track yet.')
+    })
+    return () => { alive = false }
   }, [song])
 
   useEffect(() => {
@@ -78,19 +80,49 @@ export default function SongReveal({
     return () => audio.stop()
   }, [playbackUrl, playbackType, startAt])
 
+  async function shareClassic() {
+    if (!classicMode || sharing) return
+    const url = new URL(window.location.pathname, window.location.origin)
+    url.searchParams.set('mode', 'classic')
+    const text = isCorrectAnswer
+      ? `I earned ${points} points in MuSync Classic! Can you guess the song?`
+      : 'Can you beat me at guessing songs? Play MuSync Classic!'
+    setSharing(true)
+    setShareStatus('')
+    setManualShareUrl('')
+    try {
+      if (navigator.share) {
+        try {
+          await navigator.share({ title: 'MuSync Classic', text, url: url.href })
+          setShareStatus('Shared!')
+          return
+        } catch (error) {
+          if (error.name === 'AbortError') return
+        }
+      }
+      await navigator.clipboard.writeText(url.href)
+      setShareStatus('Link copied')
+    } catch {
+      setManualShareUrl(url.href)
+      setShareStatus('Copy the link below')
+    } finally {
+      setSharing(false)
+    }
+  }
+
   if (!reviewSong) return html`<div className="song-reveal" role="dialog" aria-modal="true" aria-label="Round answer">Loading...</div>`
 
   const spotifyUrl = spotifyTrackUrl(reviewSong)
     || (resolvedSpotify?.song === song ? resolvedSpotify.url : '')
     || spotifySearchUrl(reviewSong)
-  const sourceLabel = 'OPEN IN SPOTIFY'
+  const sourceLabel = 'Open in Spotify'
   const initial = (reviewSong.artist || '?').charAt(0).toUpperCase()
   const artwork = reviewSong.artwork || reviewSong.image || null
   const difficulty = DIFFICULTIES[reviewSong.difficulty]?.label || 'UNKNOWN'
   const releaseYear = reviewSong.year || reviewSong.releaseDate?.slice?.(0, 4) || ''
 
   return html`
-    <div className="song-reveal-backdrop">
+    <div key=${`${song.id || song.title}-${round}-${isCorrectAnswer}`} className=${`song-reveal-backdrop ${isCorrectAnswer ? 'is-correct' : 'is-wrong'}`}>
     <div className="song-reveal" role="dialog" aria-modal="true" aria-label="Round answer">
       <div className="song-reveal__badge">
         <span className="song-reveal__round">ROUND REVEAL</span>
@@ -117,10 +149,13 @@ export default function SongReveal({
           </p>
           <aside className="song-reveal__trivia" aria-label="Track trivia">
             <div className="song-reveal__trivia-heading">
-              <span className="song-reveal__trivia-icon" aria-hidden="true">*</span>
+              <svg className="song-reveal__trivia-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M9 18h6M9 21h6M8.5 15.5a6 6 0 1 1 7 0c-.9.6-1.5 1.5-1.5 2.5h-4c0-1-.6-1.9-1.5-2.5Z" />
+                <path d="M12 1V0M3.5 4.5l-1-1M20.5 4.5l1-1M2 11H1M23 11h-1" />
+              </svg>
               <strong>TRACK TRIVIA</strong>
             </div>
-            <p>${triviaText || 'Finding a verified fact about this track...'}</p>
+            <p>${triviaText || 'Finding song-specific trivia...'}</p>
           </aside>
           ${showDetails && html`
             <div className="song-reveal__details" id="song-reveal-details">
@@ -146,7 +181,18 @@ export default function SongReveal({
           ${showDetails ? 'Hide Details' : 'View More Details'}
         </button>
       </div>
-          ${showDetails && spotifyUrl && html`<a className="song-reveal__source" href=${spotifyUrl} target="_blank" rel="noreferrer">${sourceLabel} ↗</a>`}
+        ${(classicMode || (showDetails && spotifyUrl)) && html`
+          <div className="song-reveal__share-row">
+            ${classicMode && html`<button type="button" className="song-reveal__share" onClick=${shareClassic} disabled=${sharing}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 16V3m-4 4 4-4 4 4M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6" />
+              </svg>
+              <span role="status" aria-live="polite">${sharing ? 'Sharing...' : shareStatus || 'Share with friends'}</span>
+            </button>`}
+            ${showDetails && spotifyUrl && html`<a className="song-reveal__source" href=${spotifyUrl} target="_blank" rel="noreferrer">${sourceLabel} <span aria-hidden="true">↗</span></a>`}
+            ${manualShareUrl && html`<input className="song-reveal__share-url" aria-label="Classic mode share link" readOnly value=${manualShareUrl} onFocus=${(event) => event.target.select()} />`}
+          </div>
+        `}
     </div>
     </div>
   `

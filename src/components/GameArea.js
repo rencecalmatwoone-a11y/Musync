@@ -11,12 +11,11 @@ const ERAS = [
 ]
 const MUSIC_ORIGINS = ['International', 'OPM / Local']
 
-function FilterCarousel({ label, options, value, onChange, disabled = false }) {
+function FilterCarousel({ label, options, value, onChange, disabled = false, showReminder, onShowReminder, onDismissReminder }) {
   const pageSize = 1
   const selectedIndex = Math.max(0, options.indexOf(value))
   const pageCount = options.length
   const [page, setPage] = useState(selectedIndex)
-  const [showReminder, setShowReminder] = useState(false)
   const dragStart = useRef(null)
   const visibleStart = page
   const visible = options.slice(visibleStart, visibleStart + pageSize)
@@ -28,16 +27,16 @@ function FilterCarousel({ label, options, value, onChange, disabled = false }) {
   useEffect(() => {
     if (!showReminder) return
     if (!disabled) {
-      setShowReminder(false)
+      onDismissReminder()
       return
     }
-    const timeout = setTimeout(() => setShowReminder(false), 5000)
+    const timeout = setTimeout(onDismissReminder, 5000)
     return () => clearTimeout(timeout)
   }, [showReminder, disabled])
 
   function changePage(delta) {
     if (disabled) {
-      setShowReminder(true)
+      onShowReminder()
       return
     }
     const next = (page + delta + pageCount) % pageCount
@@ -53,7 +52,7 @@ function FilterCarousel({ label, options, value, onChange, disabled = false }) {
   function selectOption(event, option) {
     event.stopPropagation()
     if (disabled) {
-      setShowReminder(true)
+      onShowReminder()
       return
     }
     onChange(option)
@@ -122,11 +121,21 @@ function FilterCarousel({ label, options, value, onChange, disabled = false }) {
         </button>
       </div>
       <span className="filter-carousel__count">${page + 1} / ${pageCount}</span>
-      ${showReminder && html`
-        <div className="filter-premium-reminder" role="status">
+      <div
+        className=${`filter-premium-reminder${showReminder ? ' is-visible' : ''}`}
+        role="status"
+        aria-hidden=${!showReminder}
+      >
+        <button
+          type="button"
+          className="filter-premium-reminder__dismiss"
+          aria-label="Dismiss Spotify Premium reminder"
+          tabIndex=${showReminder ? 0 : -1}
+          onClick=${onDismissReminder}
+        >
           A Spotify Premium account is required to use these filters.
-        </div>
-      `}
+        </button>
+      </div>
     </div>
   `
 }
@@ -156,11 +165,21 @@ export default function GameArea({
   filtersDisabled = false,
   statusMessages = [],
 }) {
+  const [activeReminder, setActiveReminder] = useState(null)
+
+  function reminderProps(label) {
+    return {
+      showReminder: activeReminder === label,
+      onShowReminder: () => setActiveReminder(label),
+      onDismissReminder: () => setActiveReminder((current) => current === label ? null : current),
+    }
+  }
+
   return html`
     <section className="game-area">
       <h2 className="headline">HOW WELL DO YOU KNOW YOUR MUSIC?</h2>
       <div className="filter-bar">
-        <${FilterCarousel} label="Songs" options=${MUSIC_ORIGINS} value=${musicOrigin} onChange=${onMusicOriginChange} disabled=${filtersDisabled} />
+        <${FilterCarousel} label="Songs" options=${MUSIC_ORIGINS} value=${musicOrigin} onChange=${onMusicOriginChange} disabled=${filtersDisabled} ...${reminderProps('Songs')} />
         <div className="filter-bar__divider" aria-hidden="true"></div>
         <${FilterCarousel}
           label="Era"
@@ -168,6 +187,7 @@ export default function GameArea({
           value=${era}
           onChange=${onEraChange}
           disabled=${filtersDisabled}
+          ...${reminderProps('Era')}
         />
         <div className="filter-bar__divider" aria-hidden="true"></div>
         <${FilterCarousel}
@@ -176,6 +196,7 @@ export default function GameArea({
           value=${genre}
           onChange=${onGenreChange}
           disabled=${filtersDisabled}
+          ...${reminderProps('Genre')}
         />
       </div>
       <div className=${`music-origin-badge music-origin-badge--${musicOrigin === 'OPM / Local' ? 'local' : 'international'}`}>

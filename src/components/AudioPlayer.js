@@ -32,6 +32,7 @@ export default function AudioPlayer({
   const [playing, setPlaying] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const [selectedStage, setSelectedStage] = useState(0)
+  const [stagePreview, setStagePreview] = useState(null)
   const selectedStageRef = useRef(0)
   const audio = usePreviewAudio()
   const spotify = useSpotifyPlayback(playbackType === 'spotify-sdk')
@@ -96,7 +97,10 @@ export default function AudioPlayer({
     const started = playbackType === 'spotify-sdk'
       ? await spotify.playTrack(trackId, { classic: true, positionMs: baseElapsed.current * 1000 })
       : await audio.playFrom(playbackUrl, baseElapsed.current)
-    if (attempt === playAttempt.current) setPlaying(started)
+    if (attempt === playAttempt.current) {
+      if (started) setStagePreview(null)
+      setPlaying(started)
+    }
   }
 
   function skip() {
@@ -107,6 +111,7 @@ export default function AudioPlayer({
     else audio.pause()
     const index = selectedStageRef.current
     if (index >= STAGES.length - 1 || STAGES[index] >= duration) {
+      setStagePreview(Math.min(STAGES[index], duration))
       setPlaying(false)
       if (onSkip) onSkip()
       return
@@ -115,13 +120,19 @@ export default function AudioPlayer({
     selectedStageRef.current = nextIndex
     setSelectedStage(nextIndex)
     target.current = Math.min(STAGES[nextIndex], duration)
+    setStagePreview(target.current)
     setPlaying(false)
     setElapsed(0)
     baseElapsed.current = 0
   }
 
   const safeDuration = Math.max(1, Number(duration) || 1)
-  const progressRatio = Math.max(0, Math.min(1, elapsed / safeDuration))
+  // Skip previews the selected checkpoint. Playback animates from the previous one.
+  const segmentStart = selectedStage === 0 ? 0 : Math.min(STAGES[selectedStage - 1], duration)
+  const clipProgress = target.current > 0 ? Math.min(1, Math.max(0, elapsed / target.current)) : 0
+  const indicatorElapsed = segmentStart + Math.max(0, target.current - segmentStart) * clipProgress
+  const filledElapsed = stagePreview ?? indicatorElapsed
+  const progressRatio = Math.max(0, Math.min(1, filledElapsed / safeDuration))
   const nextStageIndex = selectedStage
   const currentStage = selectedStage + 1
   const playable = Boolean(trackId && (playbackType === 'spotify-sdk' || (playbackUrl && playbackType === 'preview')))
@@ -138,7 +149,7 @@ export default function AudioPlayer({
         aria-label="Classic mode listening progress"
         aria-valuemin="0"
         aria-valuemax=${duration}
-        aria-valuenow=${Math.floor(elapsed)}
+        aria-valuenow=${filledElapsed}
       >
         <svg viewBox=${`0 0 ${SIZE} ${SIZE}`} aria-hidden="true">
           <circle className="track" pathLength="1" cx=${SIZE / 2} cy=${SIZE / 2} r=${RADIUS} />
@@ -162,7 +173,7 @@ export default function AudioPlayer({
           ${STAGES.map((stage, index) => {
             const stageTime = Math.min(stage, safeDuration)
             const angle = (stageTime / safeDuration) * 360
-            const reached = elapsed >= stageTime
+            const reached = filledElapsed >= stageTime
             return html`
               <span
                 key=${stage}

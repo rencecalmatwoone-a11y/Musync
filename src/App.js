@@ -42,7 +42,7 @@ function loadStat(key, fallback) {
 
 export default function App() {
   const [page, setPage] = useState('game')
-  const [mode, setMode] = useState(() => loadStat('musync-mode', 'classic'))
+  const [mode, setMode] = useState(() => new URLSearchParams(window.location.search).get('mode') === 'classic' ? 'classic' : loadStat('musync-mode', 'classic'))
   const [era, setEra] = useState('Any Era')
   const [genre, setGenre] = useState('Any Genre')
   const [musicOrigin, setMusicOrigin] = useState('International')
