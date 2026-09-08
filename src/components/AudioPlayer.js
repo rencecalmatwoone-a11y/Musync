@@ -6,7 +6,6 @@ import { useSpotifyPlayback } from '../hooks/useTrackAudio.js'
 const SIZE = 196
 const STROKE = 7
 const RADIUS = (SIZE - STROKE) / 2
-const CIRCUMFERENCE = 2 * Math.PI * RADIUS
 
 const STAGES = [0.5, 2, 8, 15]
 const WAVE_COUNT = 12
@@ -124,10 +123,10 @@ export default function AudioPlayer({
     baseElapsed.current = boundary
   }
 
-  const offset = CIRCUMFERENCE - (elapsed / duration) * CIRCUMFERENCE
-  const nextStageIndex = STAGES.findIndex((stage) => elapsed < Math.min(stage, duration))
+  const safeDuration = Math.max(1, Number(duration) || 1)
+  const progressRatio = Math.max(0, Math.min(1, elapsed / safeDuration))
+  const nextStageIndex = STAGES.findIndex((stage) => elapsed < Math.min(stage, safeDuration))
   const currentStage = Math.min(nextStageIndex === -1 ? STAGES.length : nextStageIndex + 1, STAGES.length)
-  const progressRatio = Math.max(0, Math.min(1, elapsed / Math.max(1, duration)))
   const playable = Boolean(trackId && (playbackType === 'spotify-sdk' || (playbackUrl && playbackType === 'preview')))
   const playbackError = playbackType === 'spotify-sdk' ? spotify.error : audioError || audio.error
   const playbackMessage = revealActive ? '' : audioLoading ? 'Loading track...'
@@ -145,14 +144,15 @@ export default function AudioPlayer({
         aria-valuenow=${Math.floor(elapsed)}
       >
         <svg viewBox=${`0 0 ${SIZE} ${SIZE}`} aria-hidden="true">
-          <circle className="track" cx=${SIZE / 2} cy=${SIZE / 2} r=${RADIUS} />
+          <circle className="track" pathLength="1" cx=${SIZE / 2} cy=${SIZE / 2} r=${RADIUS} />
           <circle
             className="progress"
+            pathLength="1"
             cx=${SIZE / 2}
             cy=${SIZE / 2}
             r=${RADIUS}
-            strokeDasharray=${CIRCUMFERENCE}
-            strokeDashoffset=${offset}
+            strokeDasharray="1"
+            strokeDashoffset=${1 - progressRatio}
           />
         </svg>
         <div className="player-ring__markers" aria-hidden="true">
@@ -163,8 +163,8 @@ export default function AudioPlayer({
             <i></i>
           </span>
           ${STAGES.map((stage, index) => {
-            const stageTime = Math.min(stage, duration)
-            const angle = (stageTime / Math.max(1, duration)) * 360
+            const stageTime = Math.min(stage, safeDuration)
+            const angle = (stageTime / safeDuration) * 360
             const reached = elapsed >= stageTime
             return html`
               <span
