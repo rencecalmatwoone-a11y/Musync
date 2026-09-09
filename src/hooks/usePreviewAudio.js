@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'https://esm.sh/react@19'
 import useAudioVolume from './useAudioSettings.js'
 
-export default function usePreviewAudio() {
+export default function usePreviewAudio({ fadeInMs = 0 } = {}) {
   const audioRef = useRef(null)
   const volume = useAudioVolume()
+  const volumeRef = useRef(volume)
+  volumeRef.current = volume
+  const fadeGainRef = useRef(fadeInMs > 0 ? 0 : 1)
   const [status, setStatus] = useState('idle')
   const [error, setError] = useState(null)
 
@@ -25,10 +28,23 @@ export default function usePreviewAudio() {
     }
     audioRef.current = node
     if (node) {
-      node.volume = volume
+      fadeGainRef.current = fadeInMs > 0 ? 0 : 1
+      node.volume = volumeRef.current * fadeGainRef.current
       node.loop = false
       node.preload = 'auto'
       let loadTimeout = null
+      let fadeInterval = null
+      let fadeStarted = false
+      const handlePlaying = () => {
+        if (fadeInMs <= 0 || fadeStarted) return
+        fadeStarted = true
+        const startTime = node.currentTime
+        fadeInterval = setInterval(() => {
+          fadeGainRef.current = Math.min(1, Math.max(0, (node.currentTime - startTime) * 1000 / fadeInMs))
+          node.volume = volumeRef.current * fadeGainRef.current
+          if (fadeGainRef.current >= 1) clearInterval(fadeInterval)
+        }, 16)
+      }
 
       const handleCanPlay = () => {
         if (loadTimeout) clearTimeout(loadTimeout)
@@ -47,6 +63,7 @@ export default function usePreviewAudio() {
       node.addEventListener('canplay', handleCanPlay)
       node.addEventListener('loadeddata', handleLoadedData)
       node.addEventListener('play', handlePlay)
+      node.addEventListener('playing', handlePlaying)
       node.addEventListener('error', handleError)
       node.addEventListener('ended', handleEnded)
       loadTimeout = setTimeout(() => {
@@ -56,18 +73,20 @@ export default function usePreviewAudio() {
         }
       }, 8000)
       node._musyncCleanup = () => {
+        if (fadeInterval) clearInterval(fadeInterval)
         if (loadTimeout) clearTimeout(loadTimeout)
         node.removeEventListener('canplay', handleCanPlay)
         node.removeEventListener('loadeddata', handleLoadedData)
         node.removeEventListener('play', handlePlay)
+        node.removeEventListener('playing', handlePlaying)
         node.removeEventListener('error', handleError)
         node.removeEventListener('ended', handleEnded)
       }
     }
-  }, [volume])
+  }, [fadeInMs])
 
   useEffect(() => {
-    if (audioRef.current) audioRef.current.volume = volume
+    if (audioRef.current) audioRef.current.volume = volume * fadeGainRef.current
   }, [volume])
 
   useEffect(() => {

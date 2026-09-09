@@ -2,7 +2,7 @@ import { useState } from 'https://esm.sh/react@19'
 import { html } from '../html.js'
 import { GENRES } from '../data/filterOptions.js'
 
-export default function ProfilePanel({ name, onSaveName, profile, score, streak, bestStreak = streak, accuracy, attempts, roundsPlayed = attempts, genre, onGenreChange }) {
+export default function ProfilePanel({ name, onSaveName, profile, score, streak, bestStreak = streak, accuracy, attempts, roundsPlayed = attempts, genre, onGenreChange, showHints, onShowHintsChange, autoplayNext, onAutoplayNextChange }) {
   const [draft, setDraft] = useState(name || '')
   const [editing, setEditing] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -97,16 +97,16 @@ export default function ProfilePanel({ name, onSaveName, profile, score, streak,
             <div className="panel-prefs__row">
               <div className="settings-row__info">
                 <span className="settings-label">Show hints</span>
-                <span className="settings-desc">Reveal artist hints while listening</span>
+                <span className="settings-desc">Reveal artist hints while listening in Classic</span>
               </div>
-              <button type="button" className="settings-toggle is-on" aria-pressed="true"><span className="settings-toggle__knob" /></button>
+              <button type="button" className=${`settings-toggle${showHints ? ' is-on' : ''}`} aria-label="Show hints" aria-pressed=${showHints} onClick=${() => onShowHintsChange(!showHints)}><span className="settings-toggle__knob" /></button>
             </div>
             <div className="panel-prefs__row">
               <div className="settings-row__info">
                 <span className="settings-label">Autoplay next clip</span>
-                <span className="settings-desc">Skip straight into the next round</span>
+                <span className="settings-desc">Play the next Classic round after 3 seconds</span>
               </div>
-              <button type="button" className="settings-toggle is-on" aria-pressed="true"><span className="settings-toggle__knob" /></button>
+              <button type="button" className=${`settings-toggle${autoplayNext ? ' is-on' : ''}`} aria-label="Autoplay next clip" aria-pressed=${autoplayNext} onClick=${() => onAutoplayNextChange(!autoplayNext)}><span className="settings-toggle__knob" /></button>
             </div>
           </div>
         </section>

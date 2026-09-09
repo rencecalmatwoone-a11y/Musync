@@ -18,6 +18,8 @@ function formatTime(seconds) {
 export default function AudioPlayer({
   duration = 15,
   trackId = null,
+  artistHint = null,
+  autoplay = false,
   playbackUrl = null,
   playbackType = 'unavailable',
   audioLoading = false,
@@ -37,6 +39,7 @@ export default function AudioPlayer({
   const audio = usePreviewAudio()
   const spotify = useSpotifyPlayback(playbackType === 'spotify-sdk')
   const playAttempt = useRef(0)
+  const autoplayAttempted = useRef(false)
   useEffect(() => {
     if (!playing || revealActive) audio.pause()
     if ((!playing || revealActive) && playbackType === 'spotify-sdk') spotify.pause()
@@ -140,6 +143,12 @@ export default function AudioPlayer({
   const playbackMessage = revealActive ? '' : audioLoading ? 'Loading track...'
     : playbackError || (!playable ? 'No playable audio available.' : '')
 
+  useEffect(() => {
+    if (!autoplay || autoplayAttempted.current || audioLoading || !playable || revealActive) return
+    autoplayAttempted.current = true
+    void toggle()
+  }, [autoplay, audioLoading, playable, revealActive])
+
   return html`
     <div className="audio-player">
       <audio ref=${audio.attach} src=${playbackUrl || undefined} preload="auto" onEnded=${() => setPlaying(false)} onError=${() => setPlaying(false)} style=${{ display: 'none' }} />
@@ -213,6 +222,7 @@ export default function AudioPlayer({
         </div>
       </div>
       <div className="timer">${formatTime(elapsed)}</div>
+      ${artistHint && selectedStage === STAGES.length - 1 && !revealActive && html`<p className="audio-status" role="status">Artist hint: ${artistHint}</p>`}
       ${availablePoints !== null && html`
         <div className="player-stage-readout" aria-live="polite">
           <span>STAGE ${currentStage} / ${STAGES.length}</span>

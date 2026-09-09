@@ -444,6 +444,7 @@ export default function MultiplayerDashboard({
               </div>
             </div>
             <${SongReveal}
+              themeDifficulty=${2}
               song=${og.song}
               isCorrectAnswer=${og.isCorrect}
               points=${og.awardedPoints}
@@ -694,6 +695,7 @@ export default function MultiplayerDashboard({
           </div>
         </div>
         <${SongReveal}
+          themeDifficulty=${isPracticeRef.current ? practiceDifficulty : 2}
           song=${correctSong}
           isCorrectAnswer=${isCorrectAnswer}
           points=${game.youState.pendingPoints || 0}

@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from 'https://esm.sh/react@19'
+import { createPortal } from 'https://esm.sh/react-dom@19'
 import { html } from '../html.js'
 import { DIFFICULTIES } from '../difficulty.js'
 import usePreviewAudio from '../hooks/usePreviewAudio.js'
+import useAudioVolume, { getAudioVolume } from '../hooks/useAudioSettings.js'
 import { fetchTracksByIds, searchCatalog } from '../spotify/client.js'
 import { spotifyTrackUrl, matchingSpotifyUrl, spotifySearchUrl } from '../music/spotifyLink.js'
 import { fetchTrackTrivia } from '../music/trivia.js'
 
 export default function SongReveal({
   song,
+  themeDifficulty = 0,
   isCorrectAnswer,
   points = 0,
   round,
@@ -31,8 +34,28 @@ export default function SongReveal({
   const [sharing, setSharing] = useState(false)
   const [manualShareUrl, setManualShareUrl] = useState('')
   const detailsRequestRef = useRef(null)
-  const audio = usePreviewAudio()
+  const audio = usePreviewAudio({ fadeInMs: isCorrectAnswer ? 0 : 1000 })
   const prefs = audio.attach
+  const missedSoundRef = useRef(null)
+  const volume = useAudioVolume()
+
+  useEffect(() => {
+    if (isCorrectAnswer) return undefined
+    const sound = new Audio('/public/sounds/fail.mp3')
+    missedSoundRef.current = sound
+    sound.volume = getAudioVolume()
+    sound.play().catch(() => {})
+    return () => {
+      sound.pause()
+      sound.removeAttribute('src')
+      sound.load()
+      missedSoundRef.current = null
+    }
+  }, [round, isCorrectAnswer])
+
+  useEffect(() => {
+    if (missedSoundRef.current) missedSoundRef.current.volume = volume
+  }, [volume])
 
   useEffect(() => {
     if (!showDetails || !song || spotifyTrackUrl(song)) return undefined
@@ -120,17 +143,25 @@ export default function SongReveal({
   const artwork = reviewSong.artwork || reviewSong.image || null
   const difficulty = DIFFICULTIES[reviewSong.difficulty]?.label || 'UNKNOWN'
   const releaseYear = reviewSong.year || reviewSong.releaseDate?.slice?.(0, 4) || ''
+  const theme = DIFFICULTIES[themeDifficulty] || DIFFICULTIES[0]
+  const themeStyle = {
+    '--yellow': theme.color,
+    '--yellow-soft': theme.soft,
+    '--dc-rgb': theme.color.slice(1).match(/../g).map((part) => parseInt(part, 16)).join(', '),
+    '--dc-glow': theme.glow,
+  }
 
-  return html`
-    <div key=${`${song.id || song.title}-${round}-${isCorrectAnswer}`} className=${`song-reveal-backdrop ${isCorrectAnswer ? 'is-correct' : 'is-wrong'}`}>
+  return createPortal(html`
+    <div key=${`${song.id || song.title}-${round}-${isCorrectAnswer}`} style=${themeStyle} className=${`song-reveal-backdrop ${isCorrectAnswer ? 'is-correct' : 'is-wrong'}`}>
     <div className="song-reveal" role="dialog" aria-modal="true" aria-label="Round answer">
       <div className="song-reveal__badge">
         <span className="song-reveal__round">ROUND REVEAL</span>
         <span className=${`song-reveal__points${isCorrectAnswer ? ' is-earned' : ''}`}>
-          ${isCorrectAnswer ? `+${points} PTS` : 'ROUND MISSED'}
+          ${isCorrectAnswer ? 'ROUND CLEARED' : 'ROUND MISSED'}
         </span>
       </div>
 
+      <div className="song-reveal__body">
       <div className="song-reveal__card">
         <audio ref=${prefs} style=${{ display: 'none' }} />
         <div className="song-reveal__art" style=${{ background: song.color }}>
@@ -193,7 +224,8 @@ export default function SongReveal({
             ${manualShareUrl && html`<input className="song-reveal__share-url" aria-label="Classic mode share link" readOnly value=${manualShareUrl} onFocus=${(event) => event.target.select()} />`}
           </div>
         `}
+      </div>
     </div>
     </div>
-  `
+  `, document.body)
 }

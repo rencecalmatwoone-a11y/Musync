@@ -150,6 +150,8 @@ export default function GameArea({
   onMusicOriginChange,
   duration,
   trackId,
+  artistHint = null,
+  autoplay = false,
   onSubmit,
   feedback,
   playbackUrl,
@@ -207,6 +209,8 @@ export default function GameArea({
         key=${trackId}
         duration=${duration}
         trackId=${trackId}
+        artistHint=${artistHint}
+        autoplay=${autoplay}
         playbackUrl=${playbackUrl}
         playbackType=${playbackType}
         audioLoading=${audioLoading}

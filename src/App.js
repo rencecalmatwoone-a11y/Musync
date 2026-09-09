@@ -59,6 +59,15 @@ export default function App() {
     loadStat('musync-stats-collapsed', false),
   )
   const [feedback, setFeedback] = useState('')
+  const [showHints, setShowHints] = useState(() => loadStat('musync-show-hints', true) !== false)
+  const [autoplayNext, setAutoplayNext] = useState(() => loadStat('musync-autoplay-next', true) !== false)
+  const [classicAutoplay, setClassicAutoplay] = useState(false)
+  useEffect(() => {
+    try {
+      localStorage.setItem('musync-show-hints', JSON.stringify(showHints))
+      localStorage.setItem('musync-autoplay-next', JSON.stringify(autoplayNext))
+    } catch {}
+  }, [showHints, autoplayNext])
   const [classicUserGuess, setClassicUserGuess] = useState('')
   const [classicReveal, setClassicReveal] = useState(false)
   const [classicAnswerLocked, setClassicAnswerLocked] = useState(false)
@@ -112,6 +121,7 @@ export default function App() {
     const generation = ++classicGenerationRef.current
     setClassicPoolLoading(true)
     setClassicTracks([])
+    setClassicAutoplay(false)
     setClassicTrackId(null)
     setClassicPoolError(null)
     setClassicRetryAt(null)
@@ -283,6 +293,7 @@ export default function App() {
     let loaded
     try { loaded = await nextClassicTrack() } finally { classicAdvancingRef.current = false }
     if (!loaded) return
+    setClassicAutoplay(autoplayNext)
     setClassicReveal(false)
     setClassicAnswerLocked(false)
     setClassicResultCorrect(false)
@@ -308,6 +319,12 @@ export default function App() {
       setPage('game')
     }
   }
+
+  useEffect(() => {
+    if (!autoplayNext || !classicReveal || classicPoolLoading || classicPoolError || page !== 'game' || mode !== 'classic') return
+    const timer = setTimeout(() => advanceClassicRound(), 3000)
+    return () => clearTimeout(timer)
+  }, [autoplayNext, classicReveal, classicPoolLoading, classicPoolError, page, mode, classicTrackId])
 
   return html`
     <div className=${`app-shell${multiplayerMode ? ' is-multiplayer' : ''}${multiplayerPractice ? ' is-mp-practice' : ''} ${difficultyKeyClass(multiplayerMode ? multiplayerDifficulty : classicDifficulty)}${!multiplayerMode && statsCollapsed ? ' stats-collapsed' : ''}`}>
@@ -356,6 +373,8 @@ export default function App() {
                   filtersDisabled=${!spotifyAuthed}
                   duration=${classicDuration}
                   trackId=${classicTrackId}
+                  artistHint=${showHints ? classicTrack?.artist : null}
+                  autoplay=${autoplayNext && classicAutoplay}
                   playbackUrl=${classicAudio.playbackUrl}
                   playbackType=${classicAudio.playbackType}
                   audioLoading=${classicPoolLoading || classicAudio.loading}
@@ -382,6 +401,7 @@ export default function App() {
                 `}
                 ${classicReveal && html`
                   <${SongReveal}
+                    themeDifficulty=${classicDifficulty}
                     song=${classicTrack}
                     isCorrectAnswer=${classicResultCorrect}
                     points=${classicStats.roundPoints}
@@ -438,6 +458,10 @@ export default function App() {
                   onGenreChange=${setGenre}
                   name=${displayName}
                   onSaveName=${setDisplayName}
+                  showHints=${showHints}
+                  onShowHintsChange=${setShowHints}
+                  autoplayNext=${autoplayNext}
+                  onAutoplayNextChange=${setAutoplayNext}
                 />
               `}
               ${page === 'settings' &&

@@ -20,7 +20,7 @@
   --slate-blue: #7a93b8;
   --sidebar-w: 260px;
   --stats-w: 300px;
-  font-family: Inter, system-ui, -apple-system, Segoe UI, sans-serif;
+  font-family: 'Manrope', system-ui, -apple-system, 'Segoe UI', sans-serif;
   color: var(--cream);
   background: var(--bg);
   font-synthesis: none;
@@ -990,7 +990,7 @@ button:focus-visible {
 
 .player-ring {
   position: relative;
-  width: min(196px, 58vw);
+  width: min(196px, 58vw, 100%);
   aspect-ratio: 1;
   flex-shrink: 0;
   container-type: inline-size;
@@ -1055,7 +1055,8 @@ button:focus-visible {
 
 .player-ring__playhead i {
   position: absolute;
-  top: 0;
+  /* Match the SVG stroke center: (7 / 2) / 196 of the ring size. */
+  top: 1.785714%;
   left: 50%;
   width: 5.6cqw;
   height: 5.6cqw;
@@ -1063,19 +1064,19 @@ button:focus-visible {
   border-radius: 50%;
   background: var(--yellow-soft);
   box-shadow: 0 0 0 1cqw var(--yellow), 0 0 6.6cqw rgba(var(--dc-rgb), 0.9);
-  transform: translateX(-50%);
+  transform: translate(-50%, -50%);
 }
 
 .player-ring__marker i {
   position: absolute;
-  top: 0;
+  top: 1.785714%;
   left: 50%;
   width: 3.6cqw;
   height: 3.6cqw;
   border: 1cqw solid var(--ring-track);
   border-radius: 50%;
   background: var(--bg);
-  transform: translateX(-50%);
+  transform: translate(-50%, -50%);
   transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
@@ -2930,25 +2931,46 @@ button:focus-visible {
   overscroll-behavior: contain;
 }
 
-.song-reveal-backdrop.is-correct { --reveal-rgb: 92, 196, 132; }
-.song-reveal-backdrop.is-wrong { --reveal-rgb: 224, 94, 104; }
+.song-reveal-backdrop.is-correct { --reveal-rgb: 74, 242, 132; }
+.song-reveal-backdrop.is-wrong { --reveal-rgb: 255, 76, 92; }
 
 .song-reveal-backdrop::before {
   content: '';
   position: fixed;
   inset: 0;
   pointer-events: none;
-  background: radial-gradient(ellipse at center, rgba(var(--reveal-rgb), 0.22), rgba(var(--reveal-rgb), 0.06) 55%, transparent 85%);
-  opacity: 0.25;
+  background: radial-gradient(ellipse at center, rgba(var(--reveal-rgb), 0.46), rgba(var(--reveal-rgb), 0.24) 55%, rgba(var(--reveal-rgb), 0.08) 100%);
+  opacity: 0.4;
   animation: answer-flash 1.4s ease-out both;
 }
 
 .song-reveal-backdrop > .song-reveal { position: relative; }
 
+/* The isolated game column must also sit above the fixed mobile navbar. */
+.center-column:has(.song-reveal-backdrop) {
+  z-index: 100;
+  /* A retained entrance transform would anchor the fixed popup to the column. */
+  animation: none;
+}
+
+html:has(.song-reveal-backdrop),
+body:has(.song-reveal-backdrop) {
+  overflow: hidden;
+  scrollbar-width: none;
+}
+
+.song-reveal-backdrop,
+.song-reveal__body { scrollbar-width: none; }
+
+html:has(.song-reveal-backdrop)::-webkit-scrollbar,
+body:has(.song-reveal-backdrop)::-webkit-scrollbar,
+.song-reveal-backdrop::-webkit-scrollbar,
+.song-reveal__body::-webkit-scrollbar { display: none; }
+
 @keyframes answer-flash {
   0% { opacity: 0; }
-  22% { opacity: 1; }
-  100% { opacity: 0.25; }
+  15%, 30% { opacity: 1; }
+  100% { opacity: 0.4; }
 }
 
 .song-reveal__share-row {
@@ -3015,6 +3037,8 @@ button:focus-visible {
   flex-direction: column;
   gap: 9px;
 }
+
+.song-reveal__body { display: contents; }
 
 .song-reveal__round {
   font-size: 10px;
@@ -3118,9 +3142,9 @@ button:focus-visible {
   max-width: 100%;
   margin: 0 0 12px;
   padding: 8px 12px;
-  border: 1px solid rgba(244, 197, 36, 0.45);
+  border: 1px solid rgba(var(--dc-rgb), 0.45);
   border-radius: 8px;
-  background: rgba(244, 197, 36, 0.1);
+  background: rgba(var(--dc-rgb), 0.1);
   color: var(--cream);
   font-size: 12px;
   line-height: 1.35;
@@ -3195,7 +3219,7 @@ button:focus-visible {
 .song-reveal__points.is-earned {
   border-color: var(--yellow);
   color: var(--yellow);
-  background: rgba(244, 197, 36, 0.1);
+  background: rgba(var(--dc-rgb), 0.1);
 }
 
 .song-reveal__details {
@@ -5356,8 +5380,28 @@ button:focus-visible {
     overflow-y: auto;
     overscroll-behavior: contain;
   }
-  .song-reveal-backdrop { padding: 12px; }
-  .song-reveal { max-height: calc(100dvh - 24px); gap: 12px; }
+  .song-reveal-backdrop {
+    height: 100dvh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: max(24px, 8dvh, env(safe-area-inset-top)) 12px
+      max(24px, 8dvh, env(safe-area-inset-bottom));
+  }
+  .song-reveal { max-height: calc(100dvh - 48px); gap: 12px; }
+  .song-reveal-backdrop > .song-reveal { max-height: 100%; overflow: hidden; }
+  .song-reveal > .song-reveal__body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: inherit;
+    width: 100%;
+    min-height: 0;
+    flex-shrink: 1;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .song-reveal__body > * { flex-shrink: 0; }
   .song-reveal__art { width: 112px; height: 112px; }
   .song-reveal__actions { flex-direction: column; }
   .song-reveal__actions button { width: 100%; }
