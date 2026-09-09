@@ -1017,7 +1017,7 @@ button:focus-visible {
   stroke: var(--yellow);
   stroke-width: 7;
   stroke-linecap: round;
-  transition: stroke-dashoffset 80ms linear;
+  transition: none;
   filter: drop-shadow(0 0 5px rgba(var(--dc-rgb), 0.38));
 }
 
@@ -1043,7 +1043,7 @@ button:focus-visible {
   inset: 0;
   transform: rotate(var(--playhead-angle));
   transform-origin: center;
-  transition: transform 80ms linear;
+  transition: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1258,6 +1258,7 @@ button:focus-visible {
 }
 
 .timer {
+  font-variant-numeric: tabular-nums;
   margin-top: 20px;
   font-size: 44px;
   font-weight: 700;
@@ -2195,6 +2196,7 @@ button:focus-visible {
 }
 
 .clip-progress {
+  font-variant-numeric: tabular-nums;
   width: min(100%, 420px);
   display: grid;
   grid-template-columns: auto 1fr auto;

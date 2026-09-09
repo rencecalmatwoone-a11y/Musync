@@ -50,6 +50,11 @@ export default function AudioPlayer({
   const baseElapsed = useRef(0)
   const target = useRef(Math.min(STAGES[0], duration))
   const frame = useRef(0)
+  const elapsedRef = useRef(0)
+  const progressRef = useRef(null)
+  const playheadRef = useRef(null)
+  const positionCallback = useRef(onPlaybackPositionChange)
+  positionCallback.current = onPlaybackPositionChange
   const atBoundary = elapsed >= target.current
 
   useEffect(() => {
@@ -59,7 +64,15 @@ export default function AudioPlayer({
     const tick = (now) => {
       const limit = target.current
       const next = Math.min(limit, baseElapsed.current + (now - startedAt.current) / 1000)
-      setElapsed(next)
+      elapsedRef.current = next
+      const start = selectedStageRef.current === 0 ? 0 : Math.min(STAGES[selectedStageRef.current - 1], duration)
+      const filled = start + (limit - start) * (limit > 0 ? next / limit : 0)
+      const ratio = Math.max(0, Math.min(1, filled / Math.max(1, Number(duration) || 1)))
+      progressRef.current?.setAttribute('stroke-dashoffset', String(1 - ratio))
+      playheadRef.current?.style.setProperty('--playhead-angle', `${ratio * 360}deg`)
+      positionCallback.current?.(next)
+      // Render timer text only when its displayed second changes.
+      setElapsed((previous) => Math.floor(previous) === Math.floor(next) && next < limit ? previous : next)
       if (next >= limit) {
         setPlaying(false)
         baseElapsed.current = limit
@@ -73,7 +86,7 @@ export default function AudioPlayer({
   }, [playing, revealActive, duration])
 
   useEffect(() => {
-    if (onPlaybackPositionChange) onPlaybackPositionChange(elapsed)
+    if (onPlaybackPositionChange) onPlaybackPositionChange(elapsedRef.current)
   }, [elapsed, onPlaybackPositionChange])
 
   async function toggle() {
@@ -81,7 +94,8 @@ export default function AudioPlayer({
     const attempt = ++playAttempt.current
     if (playing) {
       cancelAnimationFrame(frame.current)
-      baseElapsed.current = elapsed
+      baseElapsed.current = elapsedRef.current
+      setElapsed(elapsedRef.current)
       if (playbackType === 'spotify-sdk') spotify.pause()
       else audio.pause()
       setPlaying(false)
@@ -92,9 +106,10 @@ export default function AudioPlayer({
       // Each stage unlocks a longer clip from the beginning. Replaying must
       // reach the same checkpoint, without selecting a different stage.
       baseElapsed.current = 0
+      elapsedRef.current = 0
       target.current = Math.min(STAGES[index], duration)
       setElapsed(baseElapsed.current)
-    } else baseElapsed.current = elapsed
+    } else baseElapsed.current = elapsedRef.current
     // Call play in the click gesture; only start the clip timer after the
     // existing public audio hook confirms that media playback succeeded.
     const started = playbackType === 'spotify-sdk'
@@ -126,13 +141,14 @@ export default function AudioPlayer({
     setStagePreview(target.current)
     setPlaying(false)
     setElapsed(0)
+    elapsedRef.current = 0
     baseElapsed.current = 0
   }
 
   const safeDuration = Math.max(1, Number(duration) || 1)
   // Skip previews the selected checkpoint. Playback animates from the previous one.
   const segmentStart = selectedStage === 0 ? 0 : Math.min(STAGES[selectedStage - 1], duration)
-  const clipProgress = target.current > 0 ? Math.min(1, Math.max(0, elapsed / target.current)) : 0
+  const clipProgress = target.current > 0 ? Math.min(1, Math.max(0, elapsedRef.current / target.current)) : 0
   const indicatorElapsed = segmentStart + Math.max(0, target.current - segmentStart) * clipProgress
   const filledElapsed = stagePreview ?? indicatorElapsed
   const progressRatio = Math.max(0, Math.min(1, filledElapsed / safeDuration))
@@ -163,6 +179,7 @@ export default function AudioPlayer({
         <svg viewBox=${`0 0 ${SIZE} ${SIZE}`} aria-hidden="true">
           <circle className="track" pathLength="1" cx=${SIZE / 2} cy=${SIZE / 2} r=${RADIUS} />
           <circle
+            ref=${progressRef}
             className="progress"
             pathLength="1"
             cx=${SIZE / 2}
@@ -174,6 +191,7 @@ export default function AudioPlayer({
         </svg>
         <div className="player-ring__markers" aria-hidden="true">
           <span
+            ref=${playheadRef}
             className="player-ring__playhead"
             style=${{ '--playhead-angle': `${progressRatio * 360}deg` }}
           >
