@@ -685,6 +685,12 @@ export async function searchTracks({
   // never silently switch to app credentials or another user's market results.
   if (requireUser) await getSpotifyPlaybackToken(sessionId)
   musicOrigin = musicOrigin === 'Any' ? 'Any' : /^(opm|opm\s*\/\s*local)$/i.test(String(musicOrigin).trim()) ? 'OPM' : 'International'
+  const classicOpm = requireUser && musicOrigin === 'OPM'
+  if (classicOpm) {
+    genre = 'Any Genre'
+    yearFrom = undefined
+    yearTo = undefined
+  }
   const cacheKey = JSON.stringify({
     genre: String(genre || 'Any Genre').trim(),
     musicOrigin: String(musicOrigin || 'International').trim(),
@@ -719,24 +725,34 @@ export async function searchTracks({
     const q = `${originQuery} ${genreQuery}${yearQuery}`.trim() || `year:1950-${new Date().getUTCFullYear()}`
     const pageLimit = Math.min(Math.max(Number(limit) || 10, 1), 10)
     const pageOffset = Math.min(Math.max(Math.floor(Number(offset) || 0), 0), 990)
-    const sp = new URLSearchParams({ type: 'track', limit: String(pageLimit), offset: String(pageOffset), market: 'US', q })
-    let res = await fetchSpotifyApi(`${API_URL}/search?${sp.toString()}`, { clientId, clientSecret }, 'search', sessionId, requireUser)
-    if (!res.ok) {
-      if (res.status === 429) throw rateLimitError(retryAfterMs(res))
-      throw await spotifyApiError(res, 'Spotify search failed')
+    const sp = new URLSearchParams({ type: 'track', limit: String(pageLimit), offset: String(pageOffset), market: classicOpm ? 'PH' : 'US', q })
+    const queries = classicOpm ? ['genre:opm', 'genre:"pinoy pop"', 'genre:"pinoy rock"'] : [q]
+    let data, items
+    for (const query of queries) {
+      sp.set('q', query)
+      const res = await fetchSpotifyApi(`${API_URL}/search?${sp.toString()}`, { clientId, clientSecret }, 'search', sessionId, requireUser)
+      if (!res.ok) {
+        if (res.status === 429) throw rateLimitError(retryAfterMs(res))
+        throw await spotifyApiError(res, 'Spotify search failed')
+      }
+      data = await res.json()
+      items = data?.tracks?.items || []
+      if (items.length || data?.tracks?.next != null) break
     }
-    let data = await res.json()
-    let items = (data && data.tracks && data.tracks.items) || []
     const candidates = items.filter((track) => {
       if (!track || !track.id || track.is_playable === false || track.is_local || track.restrictions?.reason) return false
       const year = track.album?.release_date ? Number(track.album.release_date.slice(0, 4)) : null
       return !(yFrom !== null && (!Number.isFinite(year) || year < yFrom)) && !(yTo !== null && (!Number.isFinite(year) || year > yTo))
     })
-    const genreResolved = musicOrigin === 'Any' && (!genre || genre === 'Any Genre') ? candidates
+    const genreResolved = classicOpm || (musicOrigin === 'Any' && (!genre || genre === 'Any Genre')) ? candidates
       : await resolveArtistGenres(candidates, { clientId, clientSecret }, sessionId, requireUser)
     // Resolve raw artist IDs before normalization. Unknown origins are never
     // silently treated as international, including search fallback results.
-    const originTracks = genreResolved.filter((track) => matchesGenre(track, genre)
+    // The OPM-only Spotify search already establishes origin. A second artist
+    // metadata request can return no genres or fail and discard playable songs.
+    const originTracks = classicOpm
+      ? candidates.map((track) => ({ ...normalizeTrack(track, genre, difficulty), musicOrigin: 'OPM' }))
+      : genreResolved.filter((track) => matchesGenre(track, genre)
       && (musicOrigin === 'Any' || (musicOrigin === 'OPM'
         ? isOpmTrack(track) : hasArtistGenres(track) && !isOpmTrack(track))))
       .map((track) => normalizeTrack(track, genre, difficulty))

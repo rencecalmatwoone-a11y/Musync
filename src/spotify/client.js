@@ -292,7 +292,7 @@ export async function fetchTracksByIds(ids, { genre = 'Spotify', difficulty = 0,
   }
 }
 
-export async function fetchRandomTrack({ genre, musicOrigin, yearFrom, yearTo, difficulty, recentIds = [] , source = 'unknown', preferPopular = false } = {}) {
+export async function fetchRandomTrack({ genre, musicOrigin, yearFrom, yearTo, difficulty, recentIds = [] , source = 'unknown', preferPopular = false, uniformRandom = false } = {}) {
   const classic = source === 'classic'
   if (classic) {
     const key = JSON.stringify([getTabSessionId(), genre, musicOrigin, yearFrom, yearTo, difficulty])
@@ -325,7 +325,11 @@ export async function fetchRandomTrack({ genre, musicOrigin, yearFrom, yearTo, d
       pool.played.clear()
       candidates = [...pool.tracks.values()]
     }
-    const selected = selectGameTrack(candidates, recentIds)
+    const nonRecent = candidates.filter((track) => !recentIds.includes(track.id))
+    const randomPool = nonRecent.length ? nonRecent : candidates
+    const selected = uniformRandom
+      ? randomPool[Math.floor(Math.random() * randomPool.length)] || null
+      : selectGameTrack(candidates, recentIds)
     if (selected) pool.played.add(selected.id)
     // One deduplicated page in the background while the remaining songs play.
     if (selected && available().length <= 3 && pool.nextOffset !== null) void loadPage().catch(() => {})

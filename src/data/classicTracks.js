@@ -91,7 +91,10 @@ async function fetchGuestTracks(filters = {}) {
 export async function fetchClassicTrack({ recentIds = [], ...filters } = {}) {
   const status = await getSpotifyAuthStatus()
   if (status.authed) {
-    const track = await fetchRandomTrack({ ...filters, recentIds, source: 'classic' })
+    const spotifyFilters = normalizeOrigin(filters.musicOrigin) === 'OPM'
+      ? { ...filters, genre: 'Any Genre', yearFrom: undefined, yearTo: undefined, uniformRandom: true }
+      : filters
+    const track = await fetchRandomTrack({ ...spotifyFilters, recentIds, source: 'classic' })
     if (!track) return null
     const playbackUrl = track.spotifyPreviewUrl || null
     return {

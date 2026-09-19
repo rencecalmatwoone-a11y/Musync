@@ -9,6 +9,7 @@ const RADIUS = (SIZE - STROKE) / 2
 
 const STAGES = [0.5, 2, 8, 15]
 const WAVE_COUNT = 12
+const REWIND_MS = 200
 
 function formatTime(seconds) {
   const whole = Math.max(0, Math.floor(seconds))
@@ -34,7 +35,6 @@ export default function AudioPlayer({
   const [playing, setPlaying] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const [selectedStage, setSelectedStage] = useState(0)
-  const [stagePreview, setStagePreview] = useState(null)
   const selectedStageRef = useRef(0)
   const audio = usePreviewAudio()
   const spotify = useSpotifyPlayback(playbackType === 'spotify-sdk')
@@ -51,11 +51,12 @@ export default function AudioPlayer({
   const target = useRef(Math.min(STAGES[0], duration))
   const frame = useRef(0)
   const elapsedRef = useRef(0)
+  const displayedPosition = useRef(0)
+  const rewind = useRef(null)
   const progressRef = useRef(null)
   const playheadRef = useRef(null)
   const positionCallback = useRef(onPlaybackPositionChange)
   positionCallback.current = onPlaybackPositionChange
-  const atBoundary = elapsed >= target.current
 
   useEffect(() => {
     if (!playing || revealActive) return undefined
@@ -65,9 +66,15 @@ export default function AudioPlayer({
       const limit = target.current
       const next = Math.min(limit, baseElapsed.current + (now - startedAt.current) / 1000)
       elapsedRef.current = next
-      const start = selectedStageRef.current === 0 ? 0 : Math.min(STAGES[selectedStageRef.current - 1], duration)
-      const filled = start + (limit - start) * (limit > 0 ? next / limit : 0)
-      const ratio = Math.max(0, Math.min(1, filled / Math.max(1, Number(duration) || 1)))
+      let visualPosition = next
+      if (rewind.current) {
+        const progress = Math.max(0, Math.min(1, (now - rewind.current.startedAt) / REWIND_MS))
+        const eased = progress * progress * (3 - 2 * progress)
+        visualPosition = rewind.current.from + (next - rewind.current.from) * eased
+        if (progress >= 1) rewind.current = null
+      }
+      displayedPosition.current = visualPosition
+      const ratio = Math.max(0, Math.min(1, visualPosition / Math.max(1, Number(duration) || 1)))
       progressRef.current?.setAttribute('stroke-dashoffset', String(1 - ratio))
       playheadRef.current?.style.setProperty('--playhead-angle', `${ratio * 360}deg`)
       positionCallback.current?.(next)
@@ -101,22 +108,28 @@ export default function AudioPlayer({
       setPlaying(false)
       return
     }
-    if (atBoundary) {
+    let startPosition = elapsedRef.current
+    if (startPosition >= target.current) {
       const index = selectedStageRef.current
-      // Each stage unlocks a longer clip from the beginning. Replaying must
-      // reach the same checkpoint, without selecting a different stage.
-      baseElapsed.current = 0
-      elapsedRef.current = 0
-      target.current = Math.min(STAGES[index], duration)
-      setElapsed(baseElapsed.current)
-    } else baseElapsed.current = elapsedRef.current
+      // Replay from this stage's start; animate the ring back after playback succeeds.
+      startPosition = index === 0 ? 0 : Math.min(STAGES[index - 1], duration)
+    }
     // Call play in the click gesture; only start the clip timer after the
     // existing public audio hook confirms that media playback succeeded.
     const started = playbackType === 'spotify-sdk'
-      ? await spotify.playTrack(trackId, { classic: true, positionMs: baseElapsed.current * 1000 })
-      : await audio.playFrom(playbackUrl, baseElapsed.current)
+      ? await spotify.playTrack(trackId, { classic: true, positionMs: startPosition * 1000 })
+      : await audio.playFrom(playbackUrl, startPosition)
     if (attempt === playAttempt.current) {
-      if (started) setStagePreview(null)
+      if (started) {
+        const reducedMotion = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
+        rewind.current = !reducedMotion && displayedPosition.current > startPosition
+          ? { from: displayedPosition.current, startedAt: performance.now() }
+          : null
+        if (!rewind.current) displayedPosition.current = startPosition
+        baseElapsed.current = startPosition
+        elapsedRef.current = startPosition
+        setElapsed(startPosition)
+      }
       setPlaying(started)
     }
   }
@@ -125,11 +138,11 @@ export default function AudioPlayer({
     if (audioLoading || !playable || revealActive) return
     playAttempt.current++
     cancelAnimationFrame(frame.current)
+    rewind.current = null
     if (playbackType === 'spotify-sdk') spotify.pause()
     else audio.pause()
     const index = selectedStageRef.current
     if (index >= STAGES.length - 1 || STAGES[index] >= duration) {
-      setStagePreview(Math.min(STAGES[index], duration))
       setPlaying(false)
       if (onSkip) onSkip()
       return
@@ -137,20 +150,18 @@ export default function AudioPlayer({
     const nextIndex = index + 1
     selectedStageRef.current = nextIndex
     setSelectedStage(nextIndex)
-    target.current = Math.min(STAGES[nextIndex], duration)
-    setStagePreview(target.current)
+    const stagePosition = Math.min(STAGES[nextIndex], duration)
+    target.current = stagePosition
     setPlaying(false)
-    setElapsed(0)
-    elapsedRef.current = 0
-    baseElapsed.current = 0
+    setElapsed(stagePosition)
+    elapsedRef.current = stagePosition
+    baseElapsed.current = stagePosition
+    displayedPosition.current = stagePosition
   }
 
   const safeDuration = Math.max(1, Number(duration) || 1)
-  // Skip previews the selected checkpoint. Playback animates from the previous one.
-  const segmentStart = selectedStage === 0 ? 0 : Math.min(STAGES[selectedStage - 1], duration)
-  const clipProgress = target.current > 0 ? Math.min(1, Math.max(0, elapsedRef.current / target.current)) : 0
-  const indicatorElapsed = segmentStart + Math.max(0, target.current - segmentStart) * clipProgress
-  const filledElapsed = stagePreview ?? indicatorElapsed
+  // Renders preserve the in-flight animation instead of snapping to the audio clock.
+  const filledElapsed = displayedPosition.current
   const progressRatio = Math.max(0, Math.min(1, filledElapsed / safeDuration))
   const nextStageIndex = selectedStage
   const currentStage = selectedStage + 1

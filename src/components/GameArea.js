@@ -11,7 +11,7 @@ const ERAS = [
 ]
 const MUSIC_ORIGINS = ['International', 'OPM / Local']
 
-function FilterCarousel({ label, options, value, onChange, disabled = false, showReminder, onShowReminder, onDismissReminder }) {
+function FilterCarousel({ label, options, value, onChange, disabled = false, showReminder, onShowReminder, onDismissReminder, reminderMessage = 'A Spotify Premium account is required to use these filters.' }) {
   const pageSize = 1
   const selectedIndex = Math.max(0, options.indexOf(value))
   const pageCount = options.length
@@ -129,11 +129,11 @@ function FilterCarousel({ label, options, value, onChange, disabled = false, sho
         <button
           type="button"
           className="filter-premium-reminder__dismiss"
-          aria-label="Dismiss Spotify Premium reminder"
+          aria-label="Dismiss filter reminder"
           tabIndex=${showReminder ? 0 : -1}
           onClick=${onDismissReminder}
         >
-          A Spotify Premium account is required to use these filters.
+          ${reminderMessage}
         </button>
       </div>
     </div>
@@ -168,6 +168,8 @@ export default function GameArea({
   statusMessages = [],
 }) {
   const [activeReminder, setActiveReminder] = useState(null)
+  const randomizedLocal = !filtersDisabled && musicOrigin === 'OPM / Local'
+  const localReminder = 'OPM / Local songs are randomized across all eras and genres.'
 
   function reminderProps(label) {
     return {
@@ -186,18 +188,20 @@ export default function GameArea({
         <${FilterCarousel}
           label="Era"
           options=${ERAS}
-          value=${era}
+          value=${randomizedLocal ? 'Any Era' : era}
           onChange=${onEraChange}
-          disabled=${filtersDisabled}
+          disabled=${filtersDisabled || randomizedLocal}
+          reminderMessage=${randomizedLocal ? localReminder : undefined}
           ...${reminderProps('Era')}
         />
         <div className="filter-bar__divider" aria-hidden="true"></div>
         <${FilterCarousel}
           label="Genre"
           options=${GENRES}
-          value=${genre}
+          value=${randomizedLocal ? 'Any Genre' : genre}
           onChange=${onGenreChange}
-          disabled=${filtersDisabled}
+          disabled=${filtersDisabled || randomizedLocal}
+          reminderMessage=${randomizedLocal ? localReminder : undefined}
           ...${reminderProps('Genre')}
         />
       </div>

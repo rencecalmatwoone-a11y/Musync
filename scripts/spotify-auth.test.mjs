@@ -159,7 +159,7 @@ test('origin metadata uses bounded concurrency and caches artists across pages',
   } finally { globalThis.fetch = previousFetch }
 })
 
-test('combined OPM, genre and era filters reject unrelated and unknown metadata and retain pagination', async () => {
+test('non-Classic OPM and Classic International retain their genre/era filtering and pagination', async () => {
   await seed('filters')
   const previousFetch = globalThis.fetch
   const genres = { local: ['opm', 'pinoy rock'], foreign: ['rock'], wrongGenre: ['opm', 'pop'], unknown: [] }
@@ -181,13 +181,13 @@ test('combined OPM, genre and era filters reject unrelated and unknown metadata 
   }
   try {
     const options = { sessionId: 'filters', requireUser: true, genre: 'Rock', yearFrom: 1990, yearTo: 1999, includePageInfo: true }
-    const page = await search({ ...options, musicOrigin: 'OPM' })
+    const page = await search({ ...options, musicOrigin: 'OPM', requireUser: false })
     assert.deepEqual(page.tracks.map((track) => track.id), ['good'])
     assert.equal(page.nextOffset, 10)
-    assert.deepEqual(await search({ ...options, musicOrigin: 'OPM' }), page, 'cached pages preserve cursor')
+    assert.deepEqual(await search({ ...options, musicOrigin: 'OPM', requireUser: false }), page, 'cached pages preserve cursor')
     const international = await search({ ...options, musicOrigin: 'International' })
     assert.deepEqual(international.tracks.map((track) => track.id), ['foreign'])
-    const empty = await search({ ...options, musicOrigin: 'OPM', genre: 'Country' })
+    const empty = await search({ ...options, musicOrigin: 'OPM', genre: 'Country', requireUser: false })
     assert.equal(empty.tracks.length, 0)
     assert.equal(empty.nextOffset, 10, 'filtered empty page is not end of catalog')
   } finally { globalThis.fetch = previousFetch }
