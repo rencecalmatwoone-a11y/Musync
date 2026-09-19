@@ -37,6 +37,8 @@ export default function AudioPlayer({
   const [selectedStage, setSelectedStage] = useState(0)
   const selectedStageRef = useRef(0)
   const firstStagePlay = useRef(false)
+  const playbackTypeRef = useRef(playbackType)
+  useEffect(() => { playbackTypeRef.current = playbackType })
   const audio = usePreviewAudio()
   const spotify = useSpotifyPlayback(playbackType === 'spotify-sdk')
   const playAttempt = useRef(0)
@@ -49,8 +51,8 @@ export default function AudioPlayer({
   useEffect(() => () => {
     playAttempt.current++
     audio.stop()
-    if (playbackType === 'spotify-sdk') spotify.pause()
-  }, [audio.stop, playbackType, spotify.pause])
+    if (playbackTypeRef.current === 'spotify-sdk') spotify.pause()
+  }, [audio.stop, spotify.pause])
   const startedAt = useRef(null)
   const baseElapsed = useRef(0)
   const target = useRef(Math.min(STAGES[0], duration))
