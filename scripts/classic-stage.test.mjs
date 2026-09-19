@@ -70,7 +70,7 @@ async function player(props = {}) {
 }
 
 for (const playbackType of ['preview', 'spotify-sdk']) {
-  test(playbackType + ': Skip selects the marker and Play starts the stage', async () => {
+  test(playbackType + ': first Play after Skip plays the next segment, then replay includes earlier stages', async () => {
     const p = await player({ playbackType })
     for (const [stage, checkpoint] of [[1, 2], [2, 8], [3, 15]]) {
       p.render().skip()
@@ -85,6 +85,13 @@ for (const playbackType of ['preview', 'spotify-sdk']) {
       assert.equal(p.render().offset, selected.offset)
       assert.equal(p.positions.at(-1), start)
       assert.equal(p.state[0], true, 'Play remains usable at every stage')
+      p.advance(checkpoint - start)
+      assert.equal(p.state[0], false)
+      await p.render().play()
+      assert.equal(p.positions.at(-1), 0, 'subsequent replay includes every unlocked stage')
+      p.render()
+      p.advance(checkpoint)
+      assert.equal(p.state[0], false)
     }
     p.render().skip()
     assert.equal(p.skipped(), 1)
@@ -105,7 +112,7 @@ test('rapid skips use the latest stage before React renders', async () => {
   assert.ok(p.advance(0.1).playhead < 360)
 })
 
-test('Stage 2 animates only from 0.5 to 2 seconds and never enters Stage 3', async () => {
+test('Stage 2 first plays from 0.5 to 2 seconds and never enters Stage 3', async () => {
   const p = await player()
   p.render().skip()
   const selected = p.render()
@@ -122,7 +129,7 @@ test('Stage 2 animates only from 0.5 to 2 seconds and never enters Stage 3', asy
     previous = p.dom.angle
   }
   assert.equal(p.render().playhead, previous, 'a React render cannot rewind the animation')
-  assert.equal(p.advance(0.6).timer, '0:01')
+  assert.equal(p.advance(0.7).timer, '0:01')
   const completed = p.advance(5)
   assert.equal(completed.timer, '0:02')
   assert.equal(completed.playhead, 2 / 15 * 360)
@@ -133,7 +140,7 @@ test('Stage 2 animates only from 0.5 to 2 seconds and never enters Stage 3', asy
 
 test('replay animates the node backwards before following playback within the same stage', async () => {
   const p = await player()
-  for (const [stage, start, end] of [[0, 0, 0.5], [1, 0.5, 2], [2, 2, 8], [3, 8, 15]]) {
+  for (const [stage, start, end] of [[0, 0, 0.5], [1, 0, 2], [2, 0, 8], [3, 0, 15]]) {
     await p.render().play()
     p.render()
     const completed = p.advance(end - start)
@@ -207,12 +214,16 @@ test('pausing during rewind freezes the node, and Skip cancels the old animation
   assert.equal(p.state[0], false)
 })
 
-test('reduced motion uses the stage start immediately', async () => {
+test('reduced motion starts the new segment immediately, then replays from the beginning', async () => {
   const p = await player({ reducedMotion: true })
   p.render().skip()
   await p.render().play()
   assert.equal(p.render().playhead, 0.5 / 15 * 360)
   assert.equal(p.positions.at(-1), 0.5)
+  p.advance(1.5)
+  await p.render().play()
+  assert.equal(p.render().playhead, 0)
+  assert.equal(p.positions.at(-1), 0)
 })
 
 test('revealed tracks ignore Skip and Play', async () => {

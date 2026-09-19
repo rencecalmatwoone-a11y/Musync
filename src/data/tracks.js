@@ -61,7 +61,7 @@ export function recordSelectedTrack(track) {
 }
 
 function popularityValue(track) {
-  if (Number.isFinite(Number(track?.popularity))) {
+  if (track?.popularity != null && Number.isFinite(Number(track.popularity))) {
     return Number(track.popularity)
   }
   return null
@@ -136,7 +136,8 @@ export function selectGameTrack(tracks, recentIds = [], options = {}) {
     if (aValue !== null && bValue !== null) return bValue - aValue
     if (aValue !== null) return -1
     if (bValue !== null) return 1
-    return String(a.title || '').localeCompare(String(b.title || ''))
+    // Preserve provider relevance order when popularity is unavailable.
+    return 0
   })
 
   const pool = ranked

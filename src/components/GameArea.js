@@ -169,7 +169,7 @@ export default function GameArea({
 }) {
   const [activeReminder, setActiveReminder] = useState(null)
   const randomizedLocal = !filtersDisabled && musicOrigin === 'OPM / Local'
-  const localReminder = 'OPM / Local songs are randomized across all eras and genres.'
+  const localReminder = 'OPM / Local favors popular songs from the 2000s, 2010s, and 2020s across genres.'
 
   function reminderProps(label) {
     return {
@@ -187,8 +187,8 @@ export default function GameArea({
         <div className="filter-bar__divider" aria-hidden="true"></div>
         <${FilterCarousel}
           label="Era"
-          options=${ERAS}
-          value=${randomizedLocal ? 'Any Era' : era}
+          options=${randomizedLocal ? ['2000s–2020s'] : ERAS}
+          value=${randomizedLocal ? '2000s–2020s' : era}
           onChange=${onEraChange}
           disabled=${filtersDisabled || randomizedLocal}
           reminderMessage=${randomizedLocal ? localReminder : undefined}

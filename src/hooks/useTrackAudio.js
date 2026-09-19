@@ -338,6 +338,13 @@ export function useSpotifyPlayback(enabled = true) {
 
   const playTrack = useCallback((trackId, { classic = false, positionMs = 0 } = {}) => {
     if (!trackId) return Promise.resolve(false)
+    // Unlock browser audio synchronously in the Play click, before tokens,
+    // device transfer, or queued requests consume the user gesture.
+    const activatedPlayer = playback.player
+    let activation
+    try { activation = Promise.resolve(activatedPlayer?.activateElement?.()) }
+    catch (error) { activation = Promise.reject(error) }
+    activation.catch(() => {})
     const key = `${classic}:${trackId}:${positionMs}`
     if (playback.playRequest?.key === key && (!playback.pauseRequest || playback.playRequest.afterPause === playback.pauseRequest)) return playback.playRequest.promise
     const pendingPlay = playback.playRequest?.promise
@@ -346,10 +353,12 @@ export function useSpotifyPlayback(enabled = true) {
     const promise = (async () => {
     let stopWaiting = () => {}
     try {
+      await activation
       if (pendingPlay) await pendingPlay
       if (pendingPause) await pendingPause
       if (generation !== playback.generation) return false
       await initializeSpotifyPlayer()
+      if (playback.player !== activatedPlayer) await playback.player.activateElement?.()
       await applySpotifyVolume()
       if (generation !== playback.generation) return false
       if (!playback.deviceId) throw new Error('Musync Spotify device is not ready yet.')
@@ -359,20 +368,39 @@ export function useSpotifyPlayback(enabled = true) {
       })
       // A 204 acknowledges a command; it does not mean audio has started.
       // Start Classic's short clip timer only after the SDK confirms playback.
+      let checkPlayback = () => {}
       const audible = classic ? new Promise((resolve, reject) => {
         const listener = (state) => {
           if (state.status === 'playing' && state.trackId === trackId) resolve()
           if (['error', 'autoplay-blocked', 'login-required', 'idle'].includes(state.status)) reject(new Error(state.error || 'Spotify playback stopped.'))
         }
         const timeout = setTimeout(() => reject(new Error('Spotify did not start audio. Tap Play to retry.')), 10000)
+        let checking = false
+        checkPlayback = async () => {
+          if (checking || !playback.player?.getCurrentState) return
+          checking = true
+          try {
+            const state = await playback.player.getCurrentState()
+            if (state && !state.paused && state.track_window?.current_track?.id === trackId
+              && Math.abs(state.position - positionMs) < 2000) resolve()
+          } catch {} finally { checking = false }
+        }
+        // Replaying the same recording does not always emit a new SDK event.
+        let poll = null
         playbackListeners.add(listener)
-        stopWaiting = () => { clearTimeout(timeout); playbackListeners.delete(listener) }
+        const startChecking = checkPlayback
+        checkPlayback = () => {
+          poll ??= setInterval(startChecking, 250)
+          void startChecking()
+        }
+        stopWaiting = () => { clearTimeout(timeout); clearInterval(poll); playbackListeners.delete(listener) }
       }) : Promise.resolve()
       audible.catch(() => {})
       await spotifyPlaybackRequest(`/me/player/play?device_id=${encodeURIComponent(playback.deviceId)}`, {
         method: 'PUT',
         body: JSON.stringify({ uris: [`spotify:track:${trackId}`], position_ms: Math.max(0, Math.round(positionMs)) }),
       })
+      checkPlayback()
       await audible
       if (generation !== playback.generation) return false
       if (playback.status === 'autoplay-blocked') return false
@@ -420,7 +448,7 @@ export function useSpotifyPlayback(enabled = true) {
       if (pendingPlay) await pendingPlay
       if (generation !== playback.generation || !playback.deviceId || !playback.isPlaying) return
       try {
-        await spotifyPlaybackRequest('/me/player/pause', { method: 'PUT' })
+        await spotifyPlaybackRequest(`/me/player/pause?device_id=${encodeURIComponent(playback.deviceId)}`, { method: 'PUT' })
         if (generation === playback.generation) publishPlayback({ status: 'paused', isPlaying: false })
       } catch {}
     })().finally(() => {

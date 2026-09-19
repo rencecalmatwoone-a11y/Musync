@@ -5,7 +5,21 @@ import vm from 'node:vm'
 
 const asModule = (source) => `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`
 
-test('signed-in OPM ignores era/genre, samples uniformly, and avoids repeats; International retains filters', async () => {
+test('missing Spotify popularity preserves relevance order for weighted selection', async () => {
+  const { selectGameTrack, resetSessionTrackHistory } = await import('../src/data/tracks.js')
+  resetSessionTrackHistory()
+  const savedRandom = Math.random
+  Math.random = () => 0.6
+  try {
+    const selected = selectGameTrack([
+      { id: 'relevant', title: 'Z song', popularity: null },
+      { id: 'other', title: 'A song', popularity: null },
+    ], [], { recordSelection: false })
+    assert.equal(selected.id, 'relevant')
+  } finally { Math.random = savedRandom }
+})
+
+test('signed-in OPM favors popular 2000s–2020s songs and avoids repeats; International retains filters', async () => {
   let client = await readFile(new URL('../src/spotify/client.js', import.meta.url), 'utf8')
   client = client.replace(client.split(/\r?\n/)[0], 'const isSpotifyConfigured = true, isSpotifyAuthed = true')
   for (const name of ['tracks', 'popularTracks']) client = client.replace(`../data/${name}.js`, new URL(`../src/data/${name}.js`, import.meta.url).href)
@@ -29,10 +43,12 @@ test('signed-in OPM ignores era/genre, samples uniformly, and avoids repeats; In
   try {
     const filters = { musicOrigin: 'OPM / Local', genre: 'Rock', yearFrom: 1990, yearTo: 1999, difficulty: 2 }
     const first = await fetchClassicTrack(filters)
-    assert.equal(first.id, 'local-3', 'uniform random selection must not favor the popular song')
+    assert.equal(first.id, 'local-0', 'OPM selection should favor the popular song')
     assert.equal(first.playbackType, 'spotify-sdk')
     assert.equal(requests[0].get('musicOrigin'), 'OPM')
-    for (const key of ['genre', 'yearFrom', 'yearTo']) assert.equal(requests[0].has(key), false)
+    assert.equal(requests[0].has('genre'), false)
+    assert.equal(requests[0].get('yearFrom'), '2000')
+    assert.equal(requests[0].get('yearTo'), '2029')
     const played = new Set([first.id])
     for (let i = 0; i < 4; i++) {
       const next = await fetchClassicTrack({ ...filters, genre: 'Jazz', yearFrom: 2020, recentIds: [...played] })
@@ -69,8 +85,8 @@ test('OPM disables only Era and Genre; switching to International restores their
   const props = { era: '1990s', genre: 'Rock', musicOrigin: 'OPM / Local', filtersDisabled: false }
   const local = context.GameArea(props)
   assert.deepEqual(Array.from(valuesFor(local, 'disabled').slice(0, 3)), [false, true, true])
-  assert.deepEqual(Array.from(valuesFor(local, 'value')), ['OPM / Local', 'Any Era', 'Any Genre'])
-  for (const message of valuesFor(local, 'reminderMessage')) assert.match(message, /randomized/)
+  assert.deepEqual(Array.from(valuesFor(local, 'value')), ['OPM / Local', '2000s–2020s', 'Any Genre'])
+  for (const message of valuesFor(local, 'reminderMessage')) assert.match(message, /popular songs from the 2000s, 2010s, and 2020s/)
   const international = context.GameArea({ ...props, musicOrigin: 'International' })
   assert.deepEqual(Array.from(valuesFor(international, 'disabled').slice(0, 3)), [false, false, false])
   assert.deepEqual(Array.from(valuesFor(international, 'value')), ['International', '1990s', 'Rock'])

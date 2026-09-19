@@ -426,7 +426,7 @@ async function handleRequest(req, res) {
       ? Math.min(Math.max(requestedLimit, 1), 10)
       : 10
     const offset = Number.isFinite(requestedOffset)
-      ? Math.min(Math.max(Math.floor(requestedOffset / 10) * 10, 0), 990)
+      ? Math.min(Math.max(Math.floor(requestedOffset), 0), 990)
       : 0
     try {
       const sessionId = spotifySessionId(req)

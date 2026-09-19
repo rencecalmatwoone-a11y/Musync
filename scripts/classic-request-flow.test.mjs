@@ -37,6 +37,26 @@ test('Classic starts with one page and preserves the pool across calls', async (
 
 const song = (id) => ({ id: String(id), title: `Song ${id}`, artist: `Artist ${id}`, popularity: 50 })
 
+test('Classic follows small OPM reference pages without rounding back to the same pool', async () => {
+  const client = await loadClient()
+  const originalFetch = globalThis.fetch
+  const offsets = []
+  globalThis.fetch = async (input) => {
+    const offset = Number(new URL(input, 'https://musync.test').searchParams.get('offset'))
+    offsets.push(offset)
+    return Response.json({ tracks: Array.from({ length: 4 }, (_, i) => song(offset + i)), nextOffset: offset < 12 ? offset + 4 : null })
+  }
+  try {
+    const played = []
+    for (let i = 0; i < 16; i++) {
+      const track = await client.fetchRandomTrack({ source: 'classic', musicOrigin: 'OPM', recentIds: played })
+      assert.ok(track && !played.includes(track.id))
+      played.push(track.id)
+    }
+    assert.deepEqual(offsets, [0, 4, 8, 12])
+  } finally { globalThis.fetch = originalFetch }
+})
+
 test('Classic preloads pages, passes 30 unique songs, and remembers filter pools', async () => {
   const client = await loadClient()
   const originalFetch = globalThis.fetch

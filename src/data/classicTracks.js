@@ -92,7 +92,7 @@ export async function fetchClassicTrack({ recentIds = [], ...filters } = {}) {
   const status = await getSpotifyAuthStatus()
   if (status.authed) {
     const spotifyFilters = normalizeOrigin(filters.musicOrigin) === 'OPM'
-      ? { ...filters, genre: 'Any Genre', yearFrom: undefined, yearTo: undefined, uniformRandom: true }
+      ? { ...filters, genre: 'Any Genre', yearFrom: 2000, yearTo: 2029, uniformRandom: false }
       : filters
     const track = await fetchRandomTrack({ ...spotifyFilters, recentIds, source: 'classic' })
     if (!track) return null

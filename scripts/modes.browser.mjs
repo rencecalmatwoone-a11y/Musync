@@ -227,7 +227,7 @@ async function newPage(user = 'host', mode = 'multiplayer', failure = null, auth
       }
       if (url.pathname === '/api/classic/tracks') return reply({ provider: 'deezer', tracks: tracks.map((t) => ({ ...t, provider: 'deezer', source: 'deezer-classic', album: `Album ${t.id}`, artwork: '/public/favicon.svg', releaseDate: '2020-01-01', playbackType: 'preview', playbackUrl: `/api/audio-preview?url=${encodeURIComponent('https://cdn.dzcdn.net/' + t.id + '.mp3')}` })) })
       if (url.pathname === '/api/classic/guest-search') return reply({ provider: 'deezer', tracks })
-      if (mode === 'classic' && (/spotify|catalog/.test(url.pathname) || url.hostname === 'api.spotify.com')) throw new Error('Classic requested Spotify: ' + url.pathname)
+      if (mode === 'classic' && !authOptions.spotifyAuthed && (/spotify|catalog/.test(url.pathname) || url.hostname === 'api.spotify.com')) throw new Error('Classic requested Spotify: ' + url.pathname)
       if (url.pathname === '/api/spotify/eligibility') throw new Error('Playback must not depend on profile eligibility')
       if (url.pathname === '/api/spotify/playback-token' && failure === 'scopes') return reply({ code: 'SPOTIFY_SCOPE_REQUIRED', error: 'Reconnect Spotify to grant the required playback permissions.' }, 403)
       if (url.pathname === '/api/spotify/playback-token') return reply({ accessToken: 'fixture', expiresAt: Date.now() + 3600000 })
@@ -238,6 +238,10 @@ async function newPage(user = 'host', mode = 'multiplayer', failure = null, auth
         if (failure === 'slow-catalog') await new Promise((resolve) => setTimeout(resolve, 700))
         const musicOrigin = url.searchParams.get('musicOrigin')
         const pool = musicOrigin ? tracks.filter((_, i) => musicOrigin === 'OPM' ? i % 2 === 1 : i % 2 === 0) : tracks
+        if (mode === 'classic' && musicOrigin === 'OPM') return reply({
+          tracks: pool.slice(offset, offset + 4).map((t) => ({ ...t, musicOrigin })),
+          nextOffset: offset + 4 < pool.length ? offset + 4 : null,
+        })
         return reply({ tracks: pool.slice(offset, offset + Number(url.searchParams.get('limit'))).map((t) => ({ ...t, musicOrigin })) })
       }
       if (url.pathname === '/api/vs-audio-tracks') return reply({ tracks: tracks.map((t) => ({ ...t, provider: 'deezer', source: 'vs-audio-catalog', playbackType: 'preview' })) })
@@ -307,6 +311,37 @@ try {
     await friends.context.close()
     assert.deepEqual(errors, [])
     console.log('PASS: Classic, VS AI and friends lobby render in a real browser without startup errors')
+  } else if (process.argv.includes('--classic-spotify-only')) {
+    const classic = await newPage('spotify-classic', 'classic', null, { spotifyAuthed: true })
+    const page = classic.page
+    await page.waitForFunction(() => window.__game.classicTrack)
+    await page.getByRole('button', { name: 'Next Songs' }).click()
+    await page.waitForFunction(() => window.__game.classicTrack?.musicOrigin === 'OPM')
+    await page.waitForFunction(() => window.__sdk.player?.listeners.ready)
+    assert.ok(await page.getByText('2000s–2020s', { exact: true }).count())
+    await page.getByRole('button', { name: 'Play clip', exact: true }).click()
+    await page.waitForFunction(() => window.__sdk.activated > 0)
+    await page.getByRole('button', { name: 'Pause clip', exact: true }).waitFor()
+    await page.getByRole('button', { name: 'Play clip', exact: true }).waitFor()
+    assert.equal(await page.locator('.audio-player').getByText(/Tap Play to enable audio/).count(), 0)
+    // Replay and then move past the first four-song page.
+    await page.getByRole('button', { name: 'Play clip', exact: true }).click()
+    await page.getByRole('button', { name: 'Pause clip', exact: true }).waitFor()
+    await page.getByRole('button', { name: 'Play clip', exact: true }).waitFor()
+    const played = new Set()
+    for (let i = 0; i < 6; i++) {
+      const selected = await page.evaluate(() => window.__game.classicTrack)
+      assert.ok(!played.has(selected.id))
+      played.add(selected.id)
+      await page.getByRole('textbox', { name: 'Song guess' }).fill(selected.title)
+      await page.locator('.guess-input button[type=submit]').click()
+      await page.locator('.song-reveal__continue').click()
+      await page.waitForFunction((id) => window.__game.classicTrack?.id !== id, selected.id)
+    }
+    assert.ok(classic.requests.some((url) => /spotify\/tracks\?/.test(url) && new URL(url).searchParams.get('offset') === '4'))
+    assert.deepEqual(errors, [])
+    await classic.context.close()
+    console.log('PASS: signed-in Classic OPM unlocks Spotify audio on Play, replays clips, and advances reference pages without repeats')
   } else if (process.argv.includes('--friends-playback-only')) {
     const host = await newPage('host', 'multiplayer', 'scopes')
     const guest = await newPage('guest')

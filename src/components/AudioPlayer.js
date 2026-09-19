@@ -36,6 +36,7 @@ export default function AudioPlayer({
   const [elapsed, setElapsed] = useState(0)
   const [selectedStage, setSelectedStage] = useState(0)
   const selectedStageRef = useRef(0)
+  const firstStagePlay = useRef(false)
   const audio = usePreviewAudio()
   const spotify = useSpotifyPlayback(playbackType === 'spotify-sdk')
   const playAttempt = useRef(0)
@@ -45,7 +46,11 @@ export default function AudioPlayer({
     if ((!playing || revealActive) && playbackType === 'spotify-sdk') spotify.pause()
     if (revealActive) { playAttempt.current++; setPlaying(false) }
   }, [playing, revealActive, playbackType, audio.pause, spotify.pause])
-  useEffect(() => () => { playAttempt.current++; audio.stop() }, [audio.stop])
+  useEffect(() => () => {
+    playAttempt.current++
+    audio.stop()
+    if (playbackType === 'spotify-sdk') spotify.pause()
+  }, [audio.stop, playbackType, spotify.pause])
   const startedAt = useRef(null)
   const baseElapsed = useRef(0)
   const target = useRef(Math.min(STAGES[0], duration))
@@ -110,9 +115,10 @@ export default function AudioPlayer({
     }
     let startPosition = elapsedRef.current
     if (startPosition >= target.current) {
-      const index = selectedStageRef.current
-      // Replay from this stage's start; animate the ring back after playback succeeds.
-      startPosition = index === 0 ? 0 : Math.min(STAGES[index - 1], duration)
+      // Play the newly selected segment once, then replay all unlocked stages.
+      startPosition = firstStagePlay.current
+        ? Math.min(STAGES[selectedStageRef.current - 1], duration)
+        : 0
     }
     // Call play in the click gesture; only start the clip timer after the
     // existing public audio hook confirms that media playback succeeded.
@@ -121,6 +127,7 @@ export default function AudioPlayer({
       : await audio.playFrom(playbackUrl, startPosition)
     if (attempt === playAttempt.current) {
       if (started) {
+        firstStagePlay.current = false
         const reducedMotion = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
         rewind.current = !reducedMotion && displayedPosition.current > startPosition
           ? { from: displayedPosition.current, startedAt: performance.now() }
@@ -149,6 +156,7 @@ export default function AudioPlayer({
     }
     const nextIndex = index + 1
     selectedStageRef.current = nextIndex
+    firstStagePlay.current = true
     setSelectedStage(nextIndex)
     const stagePosition = Math.min(STAGES[nextIndex], duration)
     target.current = stagePosition

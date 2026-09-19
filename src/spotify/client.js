@@ -178,7 +178,7 @@ export async function fetchTracks({
   if (musicOrigin) musicOrigin = /^(opm|opm\s*\/\s*local)$/i.test(musicOrigin) ? 'OPM' : 'International'
   const requestedLimit = Math.min(Math.max(Number(limit) || 10, 1), 120)
   const effectiveOffset = Number.isFinite(offset) ? offset : 0
-  const requestedOffset = Math.max(Math.floor(effectiveOffset / 10) * 10, 0)
+  const requestedOffset = Math.max(Math.floor(effectiveOffset), 0)
   const cacheKey = JSON.stringify([getTabSessionId(), source === 'classic', trackCacheKey({ genre, musicOrigin, yearFrom, yearTo, difficulty, limit: requestedLimit, offset: requestedOffset }), allowPartial, timeoutMs])
   const formatResult = (result) => includePageInfo ? result : result.tracks
   const cached = trackCache.get(cacheKey)

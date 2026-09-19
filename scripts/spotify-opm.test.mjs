@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { test, after } from 'node:test'
+import { matchesOpmReference, opmReferenceOrder } from '../server/services/opmCatalog.js'
 
 process.env.VERCEL = '1'
 process.env.SPOTIFY_CLIENT_ID = 'opm-test'
@@ -11,81 +12,105 @@ sessionStore.set = async (kind, id, data) => { sessions.set(id, structuredClone(
 const { searchTracks } = await import('../server/services/spotify.js')
 const nativeFetch = globalThis.fetch
 after(() => { globalThis.fetch = nativeFetch })
-const track = (id, extra = {}) => ({ id, name: `Song ${id}`, artists: [{ id: `artist-${id}`, name: 'OPM Artist' }],
-  album: { release_date: '2024-01-01' }, duration_ms: 180000, ...extra })
+const track = (reference, extra = {}) => ({ id: `${reference.artist}:${reference.title}`, name: reference.title,
+  artists: [{ id: reference.artist, name: reference.artist }], album: { release_date: '2024-01-01' }, duration_ms: 180000, ...extra })
 const search = (sessionId, extra = {}) => {
   sessions.set(sessionId, { accessToken: 'test-user-token', expiresAt: Date.now() + 3600000 })
   return searchTracks({ clientId: 'opm-test', clientSecret: 'opm-test', sessionId, requireUser: true,
     musicOrigin: 'OPM / Local', includePageInfo: true, ...extra })
 }
-
-test('Classic OPM keeps playable genre-search results without requiring artist metadata', async () => {
+const queryFor = (reference) => `track:"${reference.title}" artist:"${reference.artist}" year:2000-2029`
+function mockSearch(sessionId, results = (reference) => [track(reference)]) {
   const calls = []
+  const references = opmReferenceOrder(sessionId)
   globalThis.fetch = async (input, options) => {
     const url = new URL(input)
-    calls.push(url)
+    assert.equal(url.pathname, '/v1/search', 'no artist metadata, app token, or preview lookups')
     assert.equal(options.headers.Authorization, 'Bearer test-user-token')
-    if (url.pathname.startsWith('/v1/artists/')) return Response.json({ genres: [] })
-    assert.equal(url.pathname, '/v1/search')
-    return Response.json({ tracks: { items: [track('local'), track('blocked', { is_playable: false }),
-      track('file', { is_local: true }), track('restricted', { restrictions: { reason: 'market' } })], next: null } })
+    assert.equal(url.searchParams.get('market'), 'PH')
+    assert.equal(url.searchParams.get('offset'), '0')
+    const reference = references.find((song) => queryFor(song) === url.searchParams.get('q'))
+    assert.ok(reference, 'only exact reference song searches are allowed')
+    calls.push(reference)
+    return Response.json({ tracks: { items: results(reference), next: null } })
   }
-  const result = await search('metadata')
-  assert.deepEqual(result.tracks.map((t) => t.id), ['local'])
-  assert.equal(result.tracks[0].musicOrigin, 'OPM')
-  assert.equal(result.tracks[0].playbackType, 'spotify-sdk')
-  assert.equal(calls.length, 1, 'OPM playback must not depend on artist metadata requests')
-  assert.equal(calls[0].searchParams.get('market'), 'PH')
+  return calls
+}
+
+test('reference pool rotates across artists, differs by session, and includes user-supplied hits', () => {
+  const first = opmReferenceOrder('one')
+  assert.ok(first.length > 150)
+  assert.deepEqual(opmReferenceOrder('one'), first)
+  assert.notDeepEqual(opmReferenceOrder('two').slice(0, 10), first.slice(0, 10))
+  assert.equal(new Set(first.slice(0, 40).map((song) => song.artist)).size, 40)
+  for (const [title, artist] of [['Multo', 'Cup of Joe'], ['Pantropiko', 'BINI'], ['Narda', 'Kamikazee'], ['Tadhana', 'UDD'], ['Kalapastangan', 'fitterkarma']]) {
+    assert.ok(first.some((song) => song.title === title && song.artist === artist))
+  }
+  assert.equal(new Set(first.map((song) => `${song.artist}:${song.title}`)).size, first.length)
 })
 
-test('Classic OPM ignores old era/genre values on the server and reuses its cache', async () => {
-  const calls = []
-  globalThis.fetch = async (input) => {
-    const url = new URL(input)
-    calls.push(url)
-    assert.equal(url.searchParams.get('q'), 'genre:opm')
-    return Response.json({ tracks: { items: [track('all-eras')], next: null } })
-  }
-  const first = await search('filters', { genre: 'Rock', yearFrom: 1950, yearTo: 1959 })
-  assert.equal(first.tracks.length, 1)
-  assert.deepEqual(await search('filters', { genre: 'Jazz', yearFrom: 1990, yearTo: 1999 }), first)
-  assert.equal(calls.length, 1)
+test('OPM resolves reference recordings and rejects deep cuts, covers, live versions and blocked audio', async () => {
+  const calls = mockSearch('matches', (reference) => [
+    track(reference, { id: 'obscure', name: 'An obscure album track', popularity: 100 }),
+    track(reference, { id: 'cover', artists: [{ name: 'Cover Artist' }], popularity: 100 }),
+    track(reference, { id: 'live', name: `${reference.title} - Live`, popularity: 100 }),
+    track(reference, { id: 'blocked', is_playable: false }),
+    track(reference, { id: 'file', is_local: true }),
+    track(reference, { id: 'restricted', restrictions: { reason: 'market' } }),
+    track(reference),
+  ])
+  const page = await search('matches')
+  assert.equal(calls.length, 4)
+  assert.deepEqual(page.tracks.map((song) => song.id), calls.map((song) => track(song).id))
+  assert.ok(page.tracks.every((song) => song.musicOrigin === 'OPM' && song.playbackType === 'spotify-sdk'))
+  assert.equal(page.nextOffset, 4)
 })
 
-test('empty OPM search tries another local genre and preserves pagination', async () => {
-  const queries = []
-  globalThis.fetch = async (input) => {
-    const url = new URL(input)
-    assert.equal(url.pathname, '/v1/search')
-    const q = url.searchParams.get('q')
-    queries.push(q)
-    return Response.json({ tracks: { items: q === 'genre:opm' ? [] : [track('pinoy')],
-      next: q === 'genre:opm' ? null : 'next-page' } })
-  }
-  const page = await search('fallback')
-  assert.deepEqual(queries, ['genre:opm', 'genre:"pinoy pop"'])
-  assert.equal(page.tracks[0].id, 'pinoy')
-  assert.equal(page.nextOffset, 10)
+test('OPM reuses cache and in-flight searches across inactive era and genre settings', async () => {
+  const calls = mockSearch('cache')
+  const [first, second] = await Promise.all([
+    search('cache', { genre: 'Rock', yearFrom: 1950, yearTo: 1959 }),
+    search('cache', { genre: 'Jazz', yearFrom: 1990, yearTo: 1999 }),
+  ])
+  assert.deepEqual(first, second)
+  assert.deepEqual(await search('cache'), first)
+  assert.equal(calls.length, 4)
 })
 
-test('OPM never falls back to unrestricted International results', async () => {
-  const queries = []
-  globalThis.fetch = async (input) => {
-    const url = new URL(input)
-    queries.push(url.searchParams.get('q'))
-    return Response.json({ tracks: { items: [], next: null } })
-  }
-  const page = await search('empty')
-  assert.deepEqual(queries, ['genre:opm', 'genre:"pinoy pop"', 'genre:"pinoy rock"'])
-  assert.deepEqual(page, { tracks: [], nextOffset: null })
+test('OPM advances past unavailable references, never falls back to broad genre search, and ends at catalog boundary', async () => {
+  const calls = mockSearch('pages', () => [])
+  const first = await search('pages')
+  assert.deepEqual(first, { tracks: [], nextOffset: 4 })
+  const second = await search('pages', { offset: first.nextOffset })
+  assert.equal(second.nextOffset, 8)
+  assert.equal(new Set(calls.map(queryFor)).size, 8)
+  const total = opmReferenceOrder('pages').length
+  assert.deepEqual(await search('pages', { offset: total - 1 }), { tracks: [], nextOffset: null })
 })
 
-test('OPM propagates authorization failures instead of hiding them with another query', async () => {
+test('OPM includes all three decades and excludes old, future and unknown releases', async () => {
+  for (const year of ['1999', '2000', '2009', '2010', '2019', '2020', '2029', '2030', 'unknown']) {
+    const session = `year-${year}`
+    mockSearch(session, (reference) => [track(reference, { album: { release_date: year } })])
+    const page = await search(session, { limit: 1 })
+    assert.equal(page.tracks.length, Number(Number(year) >= 2000 && Number(year) <= 2029))
+    assert.equal(page.nextOffset, 1)
+  }
+})
+
+test('reference matching supports official artist aliases and featured credits without accepting another song', () => {
+  const reference = opmReferenceOrder('aliases').find((song) => song.title === 'Tadhana')
+  assert.ok(matchesOpmReference(track(reference, { artists: [{ name: 'Up Dharma Down' }] }), reference))
+  assert.ok(matchesOpmReference(track(reference, { name: 'Tadhana (feat. Artist)' }), reference))
+  assert.equal(matchesOpmReference(track(reference, { name: 'Tadhana - Karaoke' }), reference), false)
+})
+
+test('OPM stops scheduling searches after authorization failure', async () => {
   let calls = 0
   globalThis.fetch = async () => {
     calls++
     return Response.json({ error: { message: 'Insufficient scope' } }, { status: 403 })
   }
   await assert.rejects(search('denied'), { status: 403 })
-  assert.equal(calls, 1)
+  assert.ok(calls <= 2, 'only already-started requests may finish after failure')
 })
