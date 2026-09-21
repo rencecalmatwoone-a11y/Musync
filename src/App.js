@@ -60,7 +60,7 @@ export default function App() {
   )
   const [feedback, setFeedback] = useState('')
   const [showHints, setShowHints] = useState(() => loadStat('musync-show-hints', true) !== false)
-  const [autoplayNext, setAutoplayNext] = useState(() => loadStat('musync-autoplay-next', true) !== false)
+  const [autoplayNext, setAutoplayNext] = useState(() => loadStat('musync-autoplay-next', false) !== false)
   const [classicAutoplay, setClassicAutoplay] = useState(false)
   useEffect(() => {
     try {
