@@ -190,7 +190,7 @@ test('sparse searches keep their cursor after the foreground request budget', as
     return Response.json({ tracks: offset === 50 ? [song('deep-match')] : [], nextOffset: offset < 50 ? offset + 10 : null })
   }
   try {
-    assert.equal(await client.fetchRandomTrack({ source: 'classic' }), null)
+    await assert.rejects(client.fetchRandomTrack({ source: 'classic' }), { code: 'CLASSIC_SEARCH_INCOMPLETE' })
     assert.equal(offsets.length, 5)
     assert.equal((await client.fetchRandomTrack({ source: 'classic' })).id, 'deep-match')
     assert.deepEqual(offsets, [0, 10, 20, 30, 40, 50])

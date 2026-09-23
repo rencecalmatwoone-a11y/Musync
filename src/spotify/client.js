@@ -321,6 +321,11 @@ export async function fetchRandomTrack({ genre, musicOrigin, yearFrom, yearTo, d
     // Bound work per interaction; keep the cursor so a retry continues scanning.
     for (let pages = 0; !available().length && pool.nextOffset !== null && pages < 5; pages++) await loadPage()
     let candidates = available()
+    if (!candidates.length && pool.nextOffset !== null) {
+      const error = new Error('No playable match found yet. Retry songs to continue searching these filters.')
+      error.code = 'CLASSIC_SEARCH_INCOMPLETE'
+      throw error
+    }
     if (!candidates.length && pool.nextOffset === null && pool.tracks.size) {
       pool.played.clear()
       candidates = [...pool.tracks.values()]

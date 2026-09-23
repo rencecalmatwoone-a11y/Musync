@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
 
 let version = 0
-async function withPlayer({ failures = [], tokenError = null, emitState = true, pollState = false, playbackStatus = 204 } = {}, run) {
+async function withPlayer({ failures = [], tokenError = null, emitState = true, pollState = false, playbackStatus = 204, manualReady = false, pendingFailure = false } = {}, run) {
   let source = await readFile(new URL('../src/hooks/useTrackAudio.js', import.meta.url), 'utf8')
   source = source.replace(/^import .*$/gm, '')
   source = `
@@ -44,8 +44,11 @@ async function withPlayer({ failures = [], tokenError = null, emitState = true, 
     addListener(name, listener) { this.listeners[name] = listener }
     async connect() {
       await new Promise((resolve) => this.options.getOAuthToken(resolve))
-      if (this.failure) this.listeners[this.failure]({ message: 'Fixture player error' })
-      else this.listeners.ready({ device_id: 'device' })
+      if (this.failure) {
+        this.listeners[this.failure]({ message: 'Fixture player error' })
+        if (pendingFailure) return new Promise(() => {})
+      }
+      else if (!manualReady) this.listeners.ready({ device_id: 'device' })
       return true
     }
     async setVolume() {}
@@ -113,6 +116,63 @@ test('Classic unlocks audio within the Play click and targets its own Spotify de
     assert.match(observed.commands[1].url, /device_id=device/)
     await player.pause()
     assert.match(observed.commands.at(-1).url, /player\/pause\?device_id=device/)
+  })
+})
+
+test('Classic recovers an SDK authentication error while connect is still pending', async () => {
+  await withPlayer({ failures: ['authentication_error'], pendingFailure: true }, async (player, observed) => {
+    assert.equal(await player.playTrack('opm-hit', { classic: true }), true)
+    assert.equal(observed.created(), 2)
+    assert.equal(observed.requests[1].Authorization, 'Bearer token-1')
+  })
+})
+
+test('slow Spotify registration survives the old ten-second cutoff', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  await withPlayer({ manualReady: true }, async (player, observed) => {
+    const ready = player.ensureReady()
+    await new Promise((resolve) => setImmediate(resolve))
+    const playing = player.playTrack('opm-hit', { classic: true })
+    t.mock.timers.tick(11000)
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(observed.disconnected(), 0)
+    assert.equal(observed.commands.length, 0)
+    observed.emit('ready', { device_id: 'device' })
+    await ready
+    assert.equal(await playing, true)
+    assert.equal(observed.created(), 1)
+    assert.equal(observed.activations(), 1)
+  })
+})
+
+test('late readiness recovers after timeout without discarding the activated device', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  await withPlayer({ manualReady: true }, async (player, observed) => {
+    const ready = assert.rejects(player.ensureReady(), { code: 'SPOTIFY_DEVICE_TIMEOUT' })
+    await new Promise((resolve) => setImmediate(resolve))
+    t.mock.timers.tick(30000)
+    await ready
+    assert.equal(observed.disconnected(), 0)
+    observed.emit('ready', { device_id: 'device' })
+    assert.equal(await player.playTrack('opm-hit', { classic: true }), true)
+    assert.equal(observed.created(), 1)
+  })
+})
+
+test('Play retry waits on the existing device registration after timeout', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  await withPlayer({ manualReady: true }, async (player, observed) => {
+    const ready = assert.rejects(player.ensureReady(), { code: 'SPOTIFY_DEVICE_TIMEOUT' })
+    await new Promise((resolve) => setImmediate(resolve))
+    t.mock.timers.tick(30000)
+    await ready
+    const playing = player.playTrack('opm-hit', { classic: true })
+    assert.equal(observed.activations(), 1)
+    await new Promise((resolve) => setImmediate(resolve))
+    observed.emit('ready', { device_id: 'device' })
+    assert.equal(await playing, true)
+    assert.equal(observed.created(), 1)
+    assert.equal(observed.disconnected(), 0)
   })
 })
 

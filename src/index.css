@@ -4950,23 +4950,6 @@ body:has(.song-reveal-backdrop)::-webkit-scrollbar,
   color: var(--cream);
 }
 
-.mp-card__cta::after {
-  content: '';
-  display: block;
-  width: 100%;
-  height: 2px;
-  margin-top: 6px;
-  border-radius: 2px;
-  background: var(--accent);
-  transform: scaleX(0.2);
-  transform-origin: left;
-  transition: transform 0.2s ease;
-}
-
-.mp-card:hover .mp-card__cta::after {
-  transform: scaleX(1);
-}
-
 .mp-practice {
   display: flex;
   flex-direction: column;

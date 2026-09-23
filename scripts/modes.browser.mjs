@@ -200,6 +200,11 @@ async function newPage(user = 'host', mode = 'multiplayer', failure = null, auth
           queueMicrotask(() => this.listeners.initialization_error({ message: 'Fixture device failure after connect' }))
           return true
         }
+        if (failure === 'slow-device') {
+          window.__sdk.registrationStarted = performance.now()
+          setTimeout(() => this.listeners.ready({ device_id: 'test-device' }), 11000)
+          return true
+        }
         this.listeners.ready({ device_id: 'test-device' }); return true
       }
       disconnect() { window.__sdk.disconnected++ }
@@ -235,6 +240,9 @@ async function newPage(user = 'host', mode = 'multiplayer', failure = null, auth
         if (mode === 'classic') assert.equal(url.searchParams.get('mode'), 'classic')
         if (failure === 'quota') return reply({ code: 'SPOTIFY_QUOTA_EXCEEDED', error: 'Spotify quota exceeded' }, 503)
         const offset = Number(url.searchParams.get('offset'))
+        if (failure === 'sparse-classic') return reply({
+          tracks: offset < 50 ? [] : tracks.slice(0, 1), nextOffset: offset < 50 ? offset + 10 : null,
+        })
         if (failure === 'slow-catalog') await new Promise((resolve) => setTimeout(resolve, 700))
         const musicOrigin = url.searchParams.get('musicOrigin')
         const pool = musicOrigin ? tracks.filter((_, i) => musicOrigin === 'OPM' ? i % 2 === 1 : i % 2 === 0) : tracks
@@ -312,9 +320,24 @@ try {
     assert.deepEqual(errors, [])
     console.log('PASS: Classic, VS AI and friends lobby render in a real browser without startup errors')
   } else if (process.argv.includes('--classic-spotify-only')) {
-    const classic = await newPage('spotify-classic', 'classic', null, { spotifyAuthed: true })
+    const classic = await newPage('spotify-classic', 'classic', 'slow-device', { spotifyAuthed: true })
     const page = classic.page
     await page.waitForFunction(() => window.__game.classicTrack)
+    // International filters must issue new catalog requests and stay playable.
+    for (const [button, key, value] of [['Next genre', 'genre', 'Pop'], ['Next era', 'yearFrom', '1950']]) {
+      const response = page.waitForResponse((res) => {
+        const url = new URL(res.url())
+        return url.pathname === '/api/spotify/tracks' && url.searchParams.get(key) === value
+      })
+      await page.getByRole('button', { name: button, exact: true }).click()
+      await response
+      await page.waitForFunction(() => window.__game.classicTrack)
+      await page.waitForFunction(() => !document.querySelector('.play-btn').disabled)
+    }
+    assert.ok(classic.requests.some((value) => {
+      const url = new URL(value)
+      return url.searchParams.get('genre') === 'Pop' && url.searchParams.get('yearFrom') === '1950' && url.searchParams.get('yearTo') === '1959'
+    }))
     await page.getByRole('button', { name: 'Next Songs' }).click()
     await page.waitForFunction(() => window.__game.classicTrack?.musicOrigin === 'OPM')
     await page.waitForFunction(() => window.__sdk.player?.listeners.ready)
@@ -323,6 +346,9 @@ try {
     await page.waitForFunction(() => window.__sdk.activated > 0)
     await page.getByRole('button', { name: 'Pause clip', exact: true }).waitFor()
     await page.getByRole('button', { name: 'Play clip', exact: true }).waitFor()
+    assert.equal(await page.evaluate(() => window.__sdk.created), 1)
+    assert.equal(await page.evaluate(() => window.__sdk.disconnected), 0)
+    assert.ok(await page.evaluate(() => performance.now() - window.__sdk.registrationStarted >= 11000))
     assert.equal(await page.locator('.audio-player').getByText(/Tap Play to enable audio/).count(), 0)
     // Replay and then move past the first four-song page.
     await page.getByRole('button', { name: 'Play clip', exact: true }).click()
@@ -341,7 +367,18 @@ try {
     assert.ok(classic.requests.some((url) => /spotify\/tracks\?/.test(url) && new URL(url).searchParams.get('offset') === '4'))
     assert.deepEqual(errors, [])
     await classic.context.close()
-    console.log('PASS: signed-in Classic OPM unlocks Spotify audio on Play, replays clips, and advances reference pages without repeats')
+    const sparse = await newPage('spotify-sparse', 'classic', 'sparse-classic', { spotifyAuthed: true })
+    await sparse.page.getByRole('button', { name: 'Retry songs', exact: true }).waitFor()
+    assert.equal(await sparse.page.getByRole('button', { name: 'Play clip', exact: true }).isDisabled(), true)
+    await sparse.page.getByRole('button', { name: 'Retry songs', exact: true }).click()
+    await sparse.page.waitForFunction(() => window.__game.classicTrack)
+    await sparse.page.getByRole('button', { name: 'Play clip', exact: true }).click()
+    await sparse.page.getByRole('button', { name: 'Pause clip', exact: true }).waitFor()
+    assert.ok(sparse.requests.some((value) => new URL(value).searchParams.get('offset') === '50'))
+    assert.equal(await sparse.page.getByRole('button', { name: 'Retry songs', exact: true }).count(), 0)
+    await sparse.context.close()
+    assert.deepEqual(errors, [])
+    console.log('PASS: signed-in Classic filters, sparse-search retry, slow device registration, playback, replay, and OPM pagination')
   } else if (process.argv.includes('--friends-playback-only')) {
     const host = await newPage('host', 'multiplayer', 'scopes')
     const guest = await newPage('guest')

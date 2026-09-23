@@ -178,6 +178,7 @@ export default function AudioPlayer({
   const playable = Boolean(trackId && (playbackType === 'spotify-sdk' || (playbackUrl && playbackType === 'preview')))
   const playbackError = playbackType === 'spotify-sdk' ? spotify.error : audioError || audio.error
   const playbackMessage = revealActive ? '' : audioLoading ? 'Loading track...'
+    : playbackType === 'spotify-sdk' && spotify.status === 'connecting' ? 'Connecting to Spotify...'
     : playbackError || (!playable ? 'No playable audio available.' : '')
 
   useEffect(() => {

@@ -26,7 +26,7 @@ async function player(props = {}) {
     useEffect(callback, deps) {
       const index = effectIndex++
       const previous = effects[index]
-      if (!previous || deps.some((value, i) => value !== previous.deps[i])) {
+      if (!previous || !deps || !previous.deps || deps.some((value, i) => value !== previous.deps[i])) {
         pendingEffects.push(() => {
           previous?.cleanup?.()
           effects[index] = { deps, cleanup: callback() }

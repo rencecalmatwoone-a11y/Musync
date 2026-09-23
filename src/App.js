@@ -371,6 +371,8 @@ export default function App() {
                   onGenreChange=${setGenre}
                   onMusicOriginChange=${setMusicOrigin}
                   filtersDisabled=${!spotifyAuthed}
+                  onRetrySongs=${classicPoolError && !classicTrack ? () => setClassicRetryVersion((value) => value + 1) : null}
+                  retrySongsDisabled=${classicPoolLoading || Boolean(classicRetryAt)}
                   duration=${classicDuration}
                   trackId=${classicTrackId}
                   artistHint=${showHints ? classicTrack?.artist : null}
@@ -392,13 +394,6 @@ export default function App() {
                   availablePoints=${classicAvailablePoints(classicStats, classicDifficulty)}
                   feedback=${feedback}
                 />
-                ${classicPoolError && !classicReveal && html`
-                  <div className="audio-status" role="status">
-                    ${!classicRetryAt && html`
-                      <button type="button" className="song-reveal__details-btn" disabled=${classicPoolLoading} onClick=${() => classicTrack ? advanceClassicRound() : setClassicRetryVersion((value) => value + 1)}>Retry songs</button>
-                    `}
-                  </div>
-                `}
                 ${classicReveal && html`
                   <${SongReveal}
                     themeDifficulty=${classicDifficulty}

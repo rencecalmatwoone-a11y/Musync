@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer'
 import { randomBytes } from 'node:crypto'
 import { sessionStore } from './sessionStore.js'
-import { matchesOpmReference, opmReferenceOrder } from './opmCatalog.js'
+import { isKnownOpmArtist, matchesOpmReference, opmReferenceOrder } from './opmCatalog.js'
 
 const ACCOUNTS_URL = 'https://accounts.spotify.com/api/token'
 const API_URL = 'https://api.spotify.com/v1'
@@ -603,7 +603,9 @@ async function fetchPublicPlaylistPageTracks(id) {
 }
 
 function isOpmTrack(track) {
-  return (track.resolvedGenres || []).some((genre) => /(?:^|[^a-z])(?:opm|pinoy|filipino|philippine|tagalog)(?:[^a-z]|$)/i.test(String(genre)))
+  const genres = track.resolvedGenres || (track.artists || []).flatMap((artist) => artistGenreCache.get(artist.id) || [])
+  return (track.artists || []).some((artist) => isKnownOpmArtist(artist.name))
+    || genres.some((genre) => /(?:^|[^a-z])(?:opm|pinoy|filipino|philippine|tagalog)(?:[^a-z]|$)/i.test(String(genre)))
 }
 
 function hasArtistGenres(track) {
@@ -787,10 +789,22 @@ export async function searchTracks({
       const year = track.album?.release_date ? Number(track.album.release_date.slice(0, 4)) : null
       return !(yFrom !== null && (!Number.isFinite(year) || year < yFrom)) && !(yTo !== null && (!Number.isFinite(year) || year > yTo))
     })
+    // Signed-in Classic already asks Spotify to filter tracks by genre/year.
+    // Artist genres describe an artist, not every recording, and their lookup
+    // must not block a playable search result or multiply each filter request.
+    if (requireUser && musicOrigin === 'International') {
+      const tracks = candidates.filter((track) => !isOpmTrack(track)).map((track) => ({
+        ...normalizeTrack(track, genre, difficulty),
+        musicOrigin: 'International',
+        genre: genre && genre !== 'Any Genre' ? genre : 'Unknown',
+      }))
+      const hasMore = data.tracks?.next != null || (data.tracks?.next === undefined && items.length === pageLimit)
+      const page = { tracks, nextOffset: hasMore && pageOffset + pageLimit <= 990 ? pageOffset + pageLimit : null }
+      trackSearchCache.set(cacheKey, { page, expiresAt: Date.now() + AUDIO_CACHE_TTL_MS })
+      return page
+    }
     const genreResolved = (musicOrigin === 'Any' && (!genre || genre === 'Any Genre')) ? candidates
       : await resolveArtistGenres(candidates, { clientId, clientSecret }, sessionId, requireUser)
-    // Resolve raw artist IDs before normalization. Unknown origins are never
-    // silently treated as international, including search fallback results.
     const originTracks = genreResolved.filter((track) => matchesGenre(track, genre)
       && (musicOrigin === 'Any' || (musicOrigin === 'OPM'
         ? isOpmTrack(track) : hasArtistGenres(track) && !isOpmTrack(track))))

@@ -24,6 +24,7 @@ export default function useTrackAudio(songId, knownPlaybackUrl = null, knownPlay
 
 const SPOTIFY_SDK_URL = 'https://sdk.scdn.co/spotify-player.js'
 const SPOTIFY_PLAYER_NAME = 'Musync Web Player'
+const SPOTIFY_DEVICE_TIMEOUT_MS = 30000
 const playbackListeners = new Set()
 const playback = {
   status: 'idle',
@@ -45,6 +46,7 @@ const playback = {
   retryAt: 0,
   classicDevice: null,
   connectionReady: false,
+  connectionPromise: null,
   isPlaying: false,
   trackId: null,
   readyResolve: null,
@@ -78,6 +80,7 @@ export async function disconnectSpotifyPlayback() {
   playback.retryAt = 0
   playback.classicDevice = null
   playback.connectionReady = false
+  playback.connectionPromise = null
   playback.isPlaying = false
   playback.deviceId = null
   playback.initializing = null
@@ -164,7 +167,7 @@ async function initializeSpotifyPlayer() {
   if (playback.initializationError?.until > Date.now()) throw playback.initializationError.error
   const generation = playback.generation
   playback.initializing = (async () => {
-    if (playback.player) {
+    if (playback.player && !playback.connectionPromise) {
       try { playback.player.disconnect() } catch {}
       playback.player = null
       playback.deviceId = null
@@ -173,7 +176,7 @@ async function initializeSpotifyPlayer() {
       playback.isPlaying = false
     }
     publishPlayback({ status: 'connecting', error: null })
-    let player = null
+    let player = playback.player
     let sdkToken = null
     let readyTimeout = null
     const ready = new Promise((resolve, reject) => {
@@ -185,66 +188,83 @@ async function initializeSpotifyPlayer() {
     try {
       await Promise.all([fetchPlaybackToken(), loadSpotifySdk()])
       if (generation !== playback.generation) throw new Error('Spotify connection cancelled.')
-      player = new window.Spotify.Player({
-        name: SPOTIFY_PLAYER_NAME,
-        getOAuthToken: async (callback) => {
-          try {
-            sdkToken = await fetchPlaybackToken()
-            if (generation === playback.generation) callback(sdkToken)
-          } catch { callback('') }
-        },
-        volume: getAudioVolume(),
-      })
-      const listen = (event, listener) => player.addListener(event, (payload) => {
-        if (generation === playback.generation && playback.player === player) listener(payload)
-      })
-      listen('ready', ({ device_id: deviceId }) => {
-        playback.deviceId = deviceId
-        publishPlayback({ status: 'ready', deviceId, connectionReady: true, error: null })
-        if (playback.readyResolve) playback.readyResolve(deviceId)
-      })
-      listen('not_ready', ({ device_id: deviceId }) => {
-        if (playback.deviceId === deviceId) {
-          playback.deviceId = null
-          playback.classicDevice = null
-          publishPlayback({ status: 'not-ready', deviceId: null, connectionReady: false })
-        }
-      })
-      listen('initialization_error', ({ message }) => {
-        playback.connectionReady = false
-        const error = new Error(`Spotify player initialization failed: ${message}`)
-        publishPlayback({ status: 'error', error: error.message })
-        if (playback.readyReject) playback.readyReject(error)
-      })
-      listen('authentication_error', ({ message }) => {
-        playback.connectionReady = false
-        playback.rejectedToken = sdkToken || playback.token
-        if (playback.token === playback.rejectedToken) playback.tokenExpiresAt = 0
-        const error = new Error(`Spotify authentication failed: ${message}`)
-        error.code = 'SPOTIFY_SDK_AUTH_ERROR'
-        publishPlayback({ status: 'error', error: error.message })
-        if (playback.readyReject) playback.readyReject(error)
-      })
-      listen('account_error', () => {
-        playback.connectionReady = false
-        const error = new Error('Spotify playback requires an eligible Premium account.')
-        error.code = 'SPOTIFY_PREMIUM_REQUIRED'
-        publishPlayback({ status: 'error', error: error.message })
-        if (playback.readyReject) playback.readyReject(error)
-      })
-      listen('playback_error', ({ message }) => publishPlayback({ status: 'error', error: `Spotify playback failed: ${message}` }))
-      listen('autoplay_failed', () => publishPlayback({ status: 'autoplay-blocked', isPlaying: false, error: 'Tap Play to enable audio in this browser.' }))
-      listen('player_state_changed', (state) => {
-        if (state) publishPlayback({ status: state.paused ? 'paused' : 'playing', isPlaying: !state.paused, trackId: state.track_window?.current_track?.id || null })
-      })
-      playback.player = player
+      // A slow device registration must not discard the SDK instance that
+      // the Play gesture already activated. Reuse its pending connection.
+      player = playback.player
+      if (!player) {
+        player = new window.Spotify.Player({
+          name: SPOTIFY_PLAYER_NAME,
+          getOAuthToken: async (callback) => {
+            try {
+              sdkToken = await fetchPlaybackToken()
+              if (generation === playback.generation && playback.player === player) callback(sdkToken)
+            } catch (error) {
+              if (generation === playback.generation && playback.player === player) playback.readyReject?.(error)
+            }
+          },
+          volume: getAudioVolume(),
+        })
+        const listen = (event, listener) => player.addListener(event, (payload) => {
+          if (generation === playback.generation && playback.player === player) listener(payload)
+        })
+        listen('ready', ({ device_id: deviceId }) => {
+          playback.deviceId = deviceId
+          publishPlayback({ status: 'ready', deviceId, connectionReady: true, error: null })
+          if (playback.readyResolve) playback.readyResolve(deviceId)
+        })
+        listen('not_ready', ({ device_id: deviceId }) => {
+          if (playback.deviceId === deviceId) {
+            playback.deviceId = null
+            playback.classicDevice = null
+            playback.connectionPromise = null
+            playback.readyReject?.(new Error('Spotify device disconnected. Tap Play to reconnect.'))
+            publishPlayback({ status: 'not-ready', deviceId: null, connectionReady: false })
+          }
+        })
+        listen('initialization_error', ({ message }) => {
+          playback.connectionReady = false
+          playback.connectionPromise = null
+          const error = new Error(`Spotify player initialization failed: ${message}`)
+          publishPlayback({ status: 'error', error: error.message })
+          if (playback.readyReject) playback.readyReject(error)
+        })
+        listen('authentication_error', ({ message }) => {
+          playback.connectionReady = false
+          playback.connectionPromise = null
+          playback.rejectedToken = sdkToken || playback.token
+          if (playback.token === playback.rejectedToken) playback.tokenExpiresAt = 0
+          const error = new Error(`Spotify authentication failed: ${message}`)
+          error.code = 'SPOTIFY_SDK_AUTH_ERROR'
+          publishPlayback({ status: 'error', error: error.message })
+          if (playback.readyReject) playback.readyReject(error)
+        })
+        listen('account_error', () => {
+          playback.connectionReady = false
+          playback.connectionPromise = null
+          const error = new Error('Spotify playback requires an eligible Premium account.')
+          error.code = 'SPOTIFY_PREMIUM_REQUIRED'
+          publishPlayback({ status: 'error', error: error.message })
+          if (playback.readyReject) playback.readyReject(error)
+        })
+        listen('playback_error', ({ message }) => publishPlayback({ status: 'error', error: `Spotify playback failed: ${message}` }))
+        listen('autoplay_failed', () => publishPlayback({ status: 'autoplay-blocked', isPlaying: false, error: 'Tap Play to enable audio in this browser.' }))
+        listen('player_state_changed', (state) => {
+          if (state) publishPlayback({ status: state.paused ? 'paused' : 'playing', isPlaying: !state.paused, trackId: state.track_window?.current_track?.id || null })
+        })
+        playback.player = player
+        playback.connectionPromise = Promise.resolve(player.connect()).then((connected) => {
+          if (!connected) throw new Error('Spotify player could not connect.')
+        })
+      }
       await Promise.race([
-        (async () => {
-          if (!await player.connect()) throw new Error('Spotify player could not connect.')
-          await ready
-        })(),
+        // SDK errors must reject immediately even when connect() is pending.
+        Promise.all([playback.connectionPromise, ready]),
         new Promise((_, reject) => {
-          readyTimeout = setTimeout(() => reject(new Error('Musync Spotify device was not ready.')), 10000)
+          readyTimeout = setTimeout(() => {
+            const error = new Error('Spotify is still connecting. Tap Play to retry.')
+            error.code = 'SPOTIFY_DEVICE_TIMEOUT'
+            reject(error)
+          }, SPOTIFY_DEVICE_TIMEOUT_MS)
         }),
       ])
       if (generation !== playback.generation) throw new Error('Spotify connection cancelled.')
@@ -252,11 +272,15 @@ async function initializeSpotifyPlayer() {
       playback.initializationError = null
       return player
     } catch (error) {
-      if (player) {
+      const waitingForDevice = error.code === 'SPOTIFY_DEVICE_TIMEOUT'
+      if (player && !waitingForDevice) {
         try { player.disconnect() } catch {}
       }
       if (generation !== playback.generation) throw error
-      playback.player = null
+      if (!waitingForDevice) {
+        playback.player = null
+        playback.connectionPromise = null
+      }
       playback.deviceId = null
       playback.connectionReady = false
       playback.initializationError = error.status === 429 || error.code === 'SPOTIFY_QUOTA_EXCEEDED'
@@ -277,6 +301,16 @@ async function initializeSpotifyPlayer() {
     }
   })()
   return playback.initializing
+}
+
+async function ensureSpotifyReady() {
+  try {
+    return await initializeSpotifyPlayer()
+  } catch (error) {
+    // Classic Play and lobby preparation share the same bounded auth recovery.
+    if (error.code !== 'SPOTIFY_SDK_AUTH_ERROR') throw error
+    return initializeSpotifyPlayer()
+  }
 }
 
 async function spotifyPlaybackRequest(path, options = {}) {
@@ -357,7 +391,7 @@ export function useSpotifyPlayback(enabled = true) {
       if (pendingPlay) await pendingPlay
       if (pendingPause) await pendingPause
       if (generation !== playback.generation) return false
-      await initializeSpotifyPlayer()
+      await ensureSpotifyReady()
       if (playback.player !== activatedPlayer) await playback.player.activateElement?.()
       await applySpotifyVolume()
       if (generation !== playback.generation) return false
@@ -422,16 +456,7 @@ export function useSpotifyPlayback(enabled = true) {
     return promise
   }, [])
 
-  const ensureReady = useCallback(async () => {
-    try {
-      return await initializeSpotifyPlayer()
-    } catch (error) {
-      // The SDK can reject a token before its reported expiry. Initialization
-      // already invalidates that token; reconnect once with refreshed credentials.
-      if (error.code !== 'SPOTIFY_SDK_AUTH_ERROR') throw error
-      return initializeSpotifyPlayer()
-    }
-  }, [])
+  const ensureReady = useCallback(ensureSpotifyReady, [])
 
   const activateElement = useCallback(() => {
     if (playback.player && typeof playback.player.activateElement === 'function') {

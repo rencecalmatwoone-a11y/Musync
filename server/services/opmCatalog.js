@@ -81,6 +81,12 @@ export function opmReferenceOrder(sessionId) {
 
 const normalize = (value) => String(value || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
   .toLowerCase().replace(/[^a-z0-9]/g, '')
+const opmArtistNames = new Set(artists.flatMap(([artist, , aliases = []]) => [artist, ...aliases]).map(normalize))
+
+export function isKnownOpmArtist(name) {
+  return opmArtistNames.has(normalize(name))
+}
+
 const titleKey = (value) => normalize(String(value || '')
   .replace(/\s*\((?:feat\.?|ft\.?|with)\s+[^)]*\)/gi, '')
   .replace(/\s+-\s+(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?$/i, ''))

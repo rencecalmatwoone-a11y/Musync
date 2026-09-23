@@ -83,3 +83,55 @@ test('supported single artist requests resolve collaborators; transient failures
   failArtists = false
   assert.equal((await search({ musicOrigin: 'International', offset: 210 }))[0].id, 'recoverable')
 })
+
+test('signed-in Classic uses genre searches without artist lookups and keeps era, origin and playback restrictions', async () => {
+  const { sessionStore } = await import('../server/services/sessionStore.js')
+  const originalGet = sessionStore.get
+  const beforeFetch = globalThis.fetch
+  sessionStore.get = async () => ({ accessToken: 'classic-user', expiresAt: Date.now() + 3600000 })
+  const queries = []
+  globalThis.fetch = async (input, options) => {
+    const url = new URL(input)
+    assert.equal(options.headers.Authorization, 'Bearer classic-user')
+    if (url.pathname === '/v1/search') {
+      queries.push(url.searchParams.get('q'))
+      const song = (id, name, extra = {}) => ({
+        ...track(id, [id]), artists: [{ id, name }], album: { release_date: '2014-01-01' }, ...extra,
+      })
+      return Response.json({ tracks: { items: [
+        song('empty-global', 'International Artist'),
+        song('empty-opm', 'BINI'),
+        song('empty-alias', 'Up Dharma Down'),
+        song('empty-collaboration', 'International Artist', { artists: [{ id: 'empty-global', name: 'International Artist' }, { id: 'empty-opm', name: 'BINI' }] }),
+        song('old', 'International Artist', { album: { release_date: '1980-01-01' } }),
+        song('blocked', 'International Artist', { is_playable: false }),
+        song('local-file', 'International Artist', { is_local: true }),
+        song('restricted', 'International Artist', { restrictions: { reason: 'market' } }),
+      ], next: null } })
+    }
+    assert.fail('Classic must not depend on an artist metadata endpoint')
+  }
+  try {
+    const options = { requireUser: true, sessionId: 'empty-genres', musicOrigin: 'International', yearFrom: 2010, yearTo: 2019 }
+    for (const genre of ['Any Genre', 'Pop', 'Rock', 'Hip-Hop', 'R&B', 'Electronic', 'Latin', 'Country']) {
+      const songs = await search({ ...options, genre })
+      assert.deepEqual(songs.map((song) => song.id), ['empty-global'])
+      assert.equal(songs[0].musicOrigin, 'International')
+      assert.equal(songs[0].genre, genre === 'Any Genre' ? 'Unknown' : genre)
+      assert.equal(songs[0].playbackType, 'spotify-sdk')
+    }
+    assert.equal(queries[0], 'year:2010-2019')
+    assert.equal(queries[4], 'genre:r-n-b year:2010-2019')
+    // No era selection must work too, with no artist metadata available.
+    assert.ok((await search({ ...options, yearFrom: undefined, yearTo: undefined })).length > 0)
+    // Unavailable artist metadata must not discard a successful track search.
+    globalThis.fetch = async (input) => {
+      if (new URL(input).pathname === '/v1/search') return Response.json({ tracks: { items: [{ ...track('metadata-error', ['uncached-failure']), album: { release_date: '2014-01-01' } }], next: null } })
+      throw new Error('Temporary metadata failure')
+    }
+    assert.equal((await search({ ...options, offset: 300 }))[0].id, 'metadata-error')
+  } finally {
+    sessionStore.get = originalGet
+    globalThis.fetch = beforeFetch
+  }
+})

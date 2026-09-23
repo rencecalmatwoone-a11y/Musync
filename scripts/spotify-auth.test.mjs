@@ -73,13 +73,13 @@ test('Classic requires a user token; app credentials are used only for unauthent
   assert.equal(calls.at(-1).authorization, 'Bearer app-token')
 })
 
-test('user pools are isolated across accounts and origin metadata uses supported single artist endpoint', async () => {
+test('user pools are isolated across accounts without additional artist requests', async () => {
   await seed('one'); await seed('two')
   const one = await search({ sessionId: 'one', requireUser: true, musicOrigin: 'International' })
   const two = await search({ sessionId: 'two', requireUser: true, musicOrigin: 'International' })
   assert.notEqual(one[0].id, two[0].id)
   assert.equal(one[0].musicOrigin, 'International')
-  assert.ok(calls.some((c) => c.path === '/v1/artists/artist'))
+  assert.ok(!calls.some((c) => c.path.startsWith('/v1/artists/')))
   const before = calls.length
   await spotify.searchCatalog({ ...credentials, sessionId: 'one', query: 'Song' })
   await spotify.getTracksByIds({ ...credentials, sessionId: 'one', ids: ['track1', 'track2'] })
@@ -149,7 +149,7 @@ test('origin metadata uses bounded concurrency and caches artists across pages',
     return Response.json({ genres: ['pop'] })
   }
   try {
-    const options = { sessionId: 'metadata', requireUser: true, musicOrigin: 'International' }
+    const options = { sessionId: 'metadata', musicOrigin: 'International' }
     const tracks = await search(options)
     assert.equal(tracks.length, 10)
     assert.ok(tracks.every((track) => track.musicOrigin === 'International'))
@@ -186,7 +186,8 @@ test('non-Classic OPM and Classic International retain their genre/era filtering
     assert.equal(page.nextOffset, 10)
     assert.deepEqual(await search({ ...options, musicOrigin: 'OPM', requireUser: false }), page, 'cached pages preserve cursor')
     const international = await search({ ...options, musicOrigin: 'International' })
-    assert.deepEqual(international.tracks.map((track) => track.id), ['foreign'])
+    assert.deepEqual(international.tracks.map((track) => track.id), ['foreign', 'unknown'], 'empty artist tags must not discard a Spotify genre search match')
+    assert.equal(international.tracks[1].genre, 'Rock')
     const empty = await search({ ...options, musicOrigin: 'OPM', genre: 'Country', requireUser: false })
     assert.equal(empty.tracks.length, 0)
     assert.equal(empty.nextOffset, 10, 'filtered empty page is not end of catalog')
