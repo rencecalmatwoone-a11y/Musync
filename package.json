@@ -16,7 +16,7 @@
     "test:stats": "node --test scripts/classic-stats.test.mjs",
     "test:classic": "node --test scripts/classic-stats.test.mjs scripts/classic-public.test.mjs scripts/classic-local.test.mjs scripts/spotify-opm.test.mjs",
     "test:origin": "node --test scripts/origin.test.mjs",
-    "test:spotify": "node --test scripts/spotify-auth.test.mjs scripts/classic-request-flow.test.mjs scripts/spotify-client-session.test.mjs scripts/spotify-playback.test.mjs",
+    "test:spotify": "node --test scripts/spotify-auth.test.mjs scripts/spotify-international.test.mjs scripts/classic-request-flow.test.mjs scripts/spotify-client-session.test.mjs scripts/spotify-playback.test.mjs",
     "test:browser": "node scripts/modes.browser.mjs",
     "test:classic:browser": "node scripts/classic-filters.browser.mjs",
     "test": "node scripts/verify-global-track-selection.mjs",

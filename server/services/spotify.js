@@ -789,22 +789,13 @@ export async function searchTracks({
       const year = track.album?.release_date ? Number(track.album.release_date.slice(0, 4)) : null
       return !(yFrom !== null && (!Number.isFinite(year) || year < yFrom)) && !(yTo !== null && (!Number.isFinite(year) || year > yTo))
     })
-    // Signed-in Classic already asks Spotify to filter tracks by genre/year.
-    // Artist genres describe an artist, not every recording, and their lookup
-    // must not block a playable search result or multiply each filter request.
-    if (requireUser && musicOrigin === 'International') {
-      const tracks = candidates.filter((track) => !isOpmTrack(track)).map((track) => ({
-        ...normalizeTrack(track, genre, difficulty),
-        musicOrigin: 'International',
-        genre: genre && genre !== 'Any Genre' ? genre : 'Unknown',
-      }))
-      const hasMore = data.tracks?.next != null || (data.tracks?.next === undefined && items.length === pageLimit)
-      const page = { tracks, nextOffset: hasMore && pageOffset + pageLimit <= 990 ? pageOffset + pageLimit : null }
-      trackSearchCache.set(cacheKey, { page, expiresAt: Date.now() + AUDIO_CACHE_TTL_MS })
-      return page
-    }
+    // Search results are candidates, not verified genre/origin classifications.
+    // Exclude known local artists before enrichment, then verify metadata using
+    // the shared cache and bounded concurrency. Unknown origin stays excluded.
+    const originCandidates = musicOrigin === 'International'
+      ? candidates.filter((track) => !isOpmTrack(track)) : candidates
     const genreResolved = (musicOrigin === 'Any' && (!genre || genre === 'Any Genre')) ? candidates
-      : await resolveArtistGenres(candidates, { clientId, clientSecret }, sessionId, requireUser)
+      : await resolveArtistGenres(originCandidates, { clientId, clientSecret }, sessionId, requireUser)
     const originTracks = genreResolved.filter((track) => matchesGenre(track, genre)
       && (musicOrigin === 'Any' || (musicOrigin === 'OPM'
         ? isOpmTrack(track) : hasArtistGenres(track) && !isOpmTrack(track))))

@@ -73,13 +73,13 @@ test('Classic requires a user token; app credentials are used only for unauthent
   assert.equal(calls.at(-1).authorization, 'Bearer app-token')
 })
 
-test('user pools are isolated across accounts without additional artist requests', async () => {
+test('user pools are isolated across accounts and artist metadata is reused', async () => {
   await seed('one'); await seed('two')
   const one = await search({ sessionId: 'one', requireUser: true, musicOrigin: 'International' })
   const two = await search({ sessionId: 'two', requireUser: true, musicOrigin: 'International' })
   assert.notEqual(one[0].id, two[0].id)
   assert.equal(one[0].musicOrigin, 'International')
-  assert.ok(!calls.some((c) => c.path.startsWith('/v1/artists/')))
+  assert.equal(calls.filter((c) => c.path.startsWith('/v1/artists/')).length, 1)
   const before = calls.length
   await spotify.searchCatalog({ ...credentials, sessionId: 'one', query: 'Song' })
   await spotify.getTracksByIds({ ...credentials, sessionId: 'one', ids: ['track1', 'track2'] })
@@ -186,8 +186,8 @@ test('non-Classic OPM and Classic International retain their genre/era filtering
     assert.equal(page.nextOffset, 10)
     assert.deepEqual(await search({ ...options, musicOrigin: 'OPM', requireUser: false }), page, 'cached pages preserve cursor')
     const international = await search({ ...options, musicOrigin: 'International' })
-    assert.deepEqual(international.tracks.map((track) => track.id), ['foreign', 'unknown'], 'empty artist tags must not discard a Spotify genre search match')
-    assert.equal(international.tracks[1].genre, 'Rock')
+    assert.deepEqual(international.tracks.map((track) => track.id), ['foreign'], 'unclassified artists must not be relabeled as International')
+    assert.equal(international.tracks[0].genre, 'rock')
     const empty = await search({ ...options, musicOrigin: 'OPM', genre: 'Country', requireUser: false })
     assert.equal(empty.tracks.length, 0)
     assert.equal(empty.nextOffset, 10, 'filtered empty page is not end of catalog')

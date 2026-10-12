@@ -28,6 +28,7 @@ const nativeFetch = globalThis.fetch
 const searchCalls = []
 const playbackCalls = []
 const artistCalls = []
+const artistGenres = new Map()
 let denySearch = false
 globalThis.fetch = async (input, options) => {
   const url = new URL(input)
@@ -36,7 +37,7 @@ globalThis.fetch = async (input, options) => {
   if (url.pathname === '/v1/me') return Response.json({ id: 'fixture-user', product: 'premium' })
   if (url.pathname.startsWith('/v1/artists/')) {
     artistCalls.push(url.pathname)
-    return Response.json({ error: { message: 'Metadata unavailable' } }, { status: 403 })
+    return Response.json({ genres: artistGenres.get(url.pathname.split('/').at(-1)) || [] })
   }
   assert.equal(url.pathname, '/v1/search')
   const query = url.searchParams.get('q')
@@ -45,6 +46,10 @@ globalThis.fetch = async (input, options) => {
   const reference = opmReferenceOrder(session).find((song) => query.startsWith(`track:"${song.title}" artist:"${song.artist}"`))
   const id = createHash('sha256').update(query).digest('hex').slice(0, 22)
   const year = reference ? 2024 : Number(query.match(/year:(\d{4})/)?.[1] || 2024)
+  const genre = ({ pop: 'Pop', rock: 'Rock', 'hip-hop': 'Hip-Hop', 'r-n-b': 'R&B', electronic: 'Electronic', latin: 'Latin', country: 'Country' })[query.match(/genre:(\S+)/)?.[1]] || 'Pop'
+  artistGenres.set('artist-' + id, [genre])
+  artistGenres.set('local-new', ['pinoy pop'])
+  artistGenres.set('wrong-genre-' + id, [genre === 'Rock' ? 'Country' : 'Rock'])
   const raw = {
     id, name: reference?.title || `Song ${id}`, uri: `spotify:track:${id}`,
     artists: [{ id: 'artist-' + id, name: reference?.artist || 'International Artist' }],
@@ -54,6 +59,9 @@ globalThis.fetch = async (input, options) => {
     raw,
     { ...raw, id: 'blocked', is_playable: false },
     { ...raw, id: 'opm', artists: [{ id: 'local', name: 'BINI' }] },
+    { ...raw, id: 'opm-new', artists: [{ id: 'local-new', name: 'Unlisted Local Artist' }] },
+    { ...raw, id: 'unknown', artists: [{ id: 'unknown', name: 'Unclassified Artist' }] },
+    ...(query.includes('genre:') ? [{ ...raw, id: 'wrong-genre', artists: [{ id: 'wrong-genre-' + id, name: 'Wrong Genre Artist' }] }] : []),
   ], next: null } })
 }
 
@@ -113,6 +121,7 @@ try {
     await page.waitForFunction(() => window.__classicTest?.track && !window.__classicTest.loading && !document.querySelector('.play-btn').disabled)
     const track = await page.evaluate(() => window.__classicTest.track)
     assert.equal(track.provider, 'spotify')
+    assert.ok(!['opm-new', 'unknown', 'wrong-genre', 'blocked', 'opm'].includes(track.id))
     assert.equal(track.playbackType, 'spotify-sdk')
     await page.getByRole('button', { name: 'Play clip', exact: true }).click()
     await page.getByRole('button', { name: 'Pause clip', exact: true }).waitFor()
@@ -139,7 +148,7 @@ try {
   assert.ok(searchCalls.includes('genre:pop year:2020-2029'))
   assert.equal((await changeFilter('Next songs')).musicOrigin, 'OPM')
   assert.equal((await changeFilter('Next songs')).musicOrigin, 'International')
-  assert.equal(artistCalls.length, 0, 'Artist requests must never block Classic filters')
+  assert.ok(artistCalls.length > 0, 'International candidates must be classified before playback')
   // An actual provider failure must remain visible.
   denySearch = true
   await page.getByRole('button', { name: 'Next genre', exact: true }).click()
