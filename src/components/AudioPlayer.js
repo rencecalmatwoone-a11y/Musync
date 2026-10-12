@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'https://esm.sh/react@19'
 import { html } from '../html.js'
 import usePreviewAudio from '../hooks/usePreviewAudio.js'
 import { useSpotifyPlayback } from '../hooks/useTrackAudio.js'
+import { spotifyPreviewWindow } from '../music/classicPreview.js'
 
 const SIZE = 196
 const STROKE = 7
@@ -46,7 +47,8 @@ export default function AudioPlayer({
   const autoplayAttempted = useRef(false)
   useEffect(() => {
     if (!playing || revealActive) audio.pause()
-    if ((!playing || revealActive) && playbackType === 'spotify-sdk') spotify.pause()
+    // The answer modal owns Spotify playback while the answer is visible.
+    if (!playing && !revealActive && playbackType === 'spotify-sdk') spotify.pause()
     if (revealActive) { playAttempt.current++; setPlaying(false) }
   }, [playing, revealActive, playbackType, audio.pause, spotify.pause])
   useEffect(() => () => {
@@ -127,9 +129,7 @@ export default function AudioPlayer({
     // existing public audio hook confirms that media playback succeeded.
     // Public previews already contain an excerpt. Spotify streams the full
     // recording, so give it an excerpt offset while keeping stage time at zero.
-    const trackSeconds = Number(trackDurationMs) / 1000
-    const excerptStart = Number.isFinite(trackSeconds) && trackSeconds > 0
-      ? Math.min(30, Math.max(0, trackSeconds - duration)) : 30
+    const { start: excerptStart } = spotifyPreviewWindow(trackDurationMs, duration)
     const started = playbackType === 'spotify-sdk'
       ? await spotify.playTrack(trackId, { classic: true, positionMs: (excerptStart + startPosition) * 1000 })
       : await audio.playFrom(playbackUrl, startPosition)

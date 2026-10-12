@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
 import vm from 'node:vm'
+import { spotifyPreviewWindow } from '../src/music/classicPreview.js'
 
 // Exercise the actual component handlers with deterministic hooks and audio.
 async function player(props = {}) {
@@ -17,6 +18,7 @@ async function player(props = {}) {
     async playTrack(id, options) { positions.push(options.positionMs / 1000); return true },
   }
   const context = vm.createContext({
+    spotifyPreviewWindow,
     useState(initial) {
       const index = stateIndex++
       if (!(index in state)) state[index] = initial

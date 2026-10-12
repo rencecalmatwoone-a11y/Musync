@@ -7,6 +7,8 @@ import useAudioVolume, { getAudioVolume } from '../hooks/useAudioSettings.js'
 import { fetchTracksByIds, searchCatalog } from '../spotify/client.js'
 import { spotifyTrackUrl, matchingSpotifyUrl, spotifySearchUrl } from '../music/spotifyLink.js'
 import { fetchTrackTrivia } from '../music/trivia.js'
+import { useSpotifyPlayback } from '../hooks/useTrackAudio.js'
+import { spotifyPreviewWindow } from '../music/classicPreview.js'
 
 export default function SongReveal({
   song,
@@ -35,6 +37,7 @@ export default function SongReveal({
   const [manualShareUrl, setManualShareUrl] = useState('')
   const detailsRequestRef = useRef(null)
   const audio = usePreviewAudio({ fadeInMs: isCorrectAnswer ? 0 : 1000 })
+  const spotify = useSpotifyPlayback(classicMode && playbackType === 'spotify-sdk')
   const prefs = audio.attach
   const missedSoundRef = useRef(null)
   const volume = useAudioVolume()
@@ -96,6 +99,27 @@ export default function SongReveal({
       .catch(() => {})
     return () => { alive = false }
   }, [song, showDetails])
+
+  useEffect(() => {
+    if (!classicMode || playbackType !== 'spotify-sdk' || !song?.id) return undefined
+    const clipDuration = song.durationMs ? Math.min(15, Math.round(song.durationMs / 1000)) : 15
+    const excerpt = spotifyPreviewWindow(song.durationMs, clipDuration)
+    const position = Math.min(excerpt.duration, Math.max(0, Number(startAt) || 0))
+    let cancelled = false
+    let timer
+    // Finish the guessing player's pending pause before continuing the excerpt.
+    void (async () => {
+      await spotify.pause()
+      if (cancelled || position >= excerpt.duration) return
+      const started = await spotify.playTrack(song.id, { classic: true, positionMs: (excerpt.start + position) * 1000 })
+      if (!cancelled && started) timer = setTimeout(() => { void spotify.pause() }, (excerpt.duration - position) * 1000)
+    })()
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+      void spotify.pause()
+    }
+  }, [classicMode, playbackType, song?.id, song?.durationMs, startAt, spotify.pause, spotify.playTrack])
 
   useEffect(() => {
     if (!playbackUrl || !['spotify', 'preview'].includes(playbackType)) return undefined
@@ -199,7 +223,7 @@ export default function SongReveal({
             </div>
           `}
         </div>
-        ${audio.error && html`<p className="audio-status">${audio.error}</p>`}
+        ${(playbackType === 'spotify-sdk' ? spotify.error : audio.error) && html`<p className="audio-status">${playbackType === 'spotify-sdk' ? spotify.error : audio.error}</p>`}
       </div>
 
       <div className="song-reveal__actions">

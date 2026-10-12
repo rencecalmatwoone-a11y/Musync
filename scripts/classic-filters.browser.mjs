@@ -27,6 +27,8 @@ const { opmReferenceOrder } = await import('../server/services/opmCatalog.js')
 const nativeFetch = globalThis.fetch
 const searchCalls = []
 const playbackCalls = []
+let expectedPosition = 30000
+let pauseCalls = 0
 const artistCalls = []
 const artistGenres = new Map()
 let denySearch = false
@@ -106,7 +108,7 @@ try {
     const url = new URL(route.request().url())
     if (url.pathname.endsWith('/play')) {
       const body = route.request().postDataJSON()
-      assert.equal(body.position_ms, 30000, 'each new Spotify clip starts inside the recording')
+      assert.equal(body.position_ms, expectedPosition, 'Spotify uses the excerpt-relative listening position')
       playbackCalls.push(body.uris[0])
       await page.evaluate(({ id, position }) => {
         const player = window.__sdkPlayer
@@ -115,6 +117,7 @@ try {
         player.listeners.player_state_changed(player.state)
       }, { id: body.uris[0].split(':').at(-1), position: body.position_ms })
     }
+    if (url.pathname.endsWith('/pause')) pauseCalls++
     await route.fulfill({ status: 204 })
   })
   await page.goto(base)
@@ -150,6 +153,36 @@ try {
   assert.equal((await changeFilter('Next songs')).musicOrigin, 'OPM')
   assert.equal((await changeFilter('Next songs')).musicOrigin, 'International')
   assert.ok(artistCalls.length > 0, 'International candidates must be classified before playback')
+  // Correct answers continue after the half-second clue, without the guessing
+  // player's state update immediately pausing the modal's audio.
+  const answer = await page.evaluate(() => window.__classicTest.track.title)
+  expectedPosition = 30500
+  const beforeAnswer = playbackCalls.length
+  await page.getByPlaceholder('What song is this?').fill(answer)
+  await page.getByPlaceholder('What song is this?').press('Enter')
+  await page.locator('.song-reveal__continue').waitFor()
+  await page.waitForFunction(() => window.__sdkPlayer.state?.position === 30500)
+  assert.equal(playbackCalls.length, beforeAnswer + 1)
+  const afterHandoff = pauseCalls
+  await page.waitForTimeout(400)
+  assert.equal(pauseCalls, afterHandoff, 'guessing player must not interrupt modal playback')
+  // Advancing the round closes the modal and stops its audio.
+  await page.locator('.song-reveal__continue').click()
+  await page.locator('.song-reveal__continue').waitFor({ state: 'hidden' })
+  await page.waitForTimeout(200)
+  assert.ok(pauseCalls > afterHandoff)
+  expectedPosition = 30000
+  await playCurrent()
+  expectedPosition = 45000
+  for (let i = 0; i < 4; i++) await page.getByRole('button', { name: 'SKIP', exact: true }).click()
+  await page.locator('.song-reveal__continue').waitFor()
+  await page.waitForFunction(() => window.__sdkPlayer.state?.position === 45000)
+  const beforeEnd = pauseCalls
+  await page.waitForTimeout(15500)
+  assert.ok(pauseCalls > beforeEnd, 'reveal stops at the end of the 30-second excerpt')
+  expectedPosition = 30000
+  await page.locator('.song-reveal__continue').click()
+  await page.locator('.song-reveal__continue').waitFor({ state: 'hidden' })
   // An actual provider failure must remain visible.
   denySearch = true
   await page.getByRole('button', { name: 'Next genre', exact: true }).click()
