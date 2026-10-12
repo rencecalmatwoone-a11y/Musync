@@ -18,6 +18,7 @@ function formatTime(seconds) {
 
 export default function AudioPlayer({
   duration = 15,
+  trackDurationMs = null,
   trackId = null,
   artistHint = null,
   autoplay = false,
@@ -124,8 +125,13 @@ export default function AudioPlayer({
     }
     // Call play in the click gesture; only start the clip timer after the
     // existing public audio hook confirms that media playback succeeded.
+    // Public previews already contain an excerpt. Spotify streams the full
+    // recording, so give it an excerpt offset while keeping stage time at zero.
+    const trackSeconds = Number(trackDurationMs) / 1000
+    const excerptStart = Number.isFinite(trackSeconds) && trackSeconds > 0
+      ? Math.min(30, Math.max(0, trackSeconds - duration)) : 30
     const started = playbackType === 'spotify-sdk'
-      ? await spotify.playTrack(trackId, { classic: true, positionMs: startPosition * 1000 })
+      ? await spotify.playTrack(trackId, { classic: true, positionMs: (excerptStart + startPosition) * 1000 })
       : await audio.playFrom(playbackUrl, startPosition)
     if (attempt === playAttempt.current) {
       if (started) {

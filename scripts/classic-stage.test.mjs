@@ -72,6 +72,7 @@ async function player(props = {}) {
 for (const playbackType of ['preview', 'spotify-sdk']) {
   test(playbackType + ': first Play after Skip plays the next segment, then replay includes earlier stages', async () => {
     const p = await player({ playbackType })
+    const excerptStart = playbackType === 'spotify-sdk' ? 30 : 0
     for (const [stage, checkpoint] of [[1, 2], [2, 8], [3, 15]]) {
       p.render().skip()
       const selected = p.render()
@@ -83,12 +84,12 @@ for (const playbackType of ['preview', 'spotify-sdk']) {
       const start = [0, 0.5, 2, 8][stage]
       assert.equal(p.render().playhead, selected.playhead, 'Play begins the rewind without snapping')
       assert.equal(p.render().offset, selected.offset)
-      assert.equal(p.positions.at(-1), start)
+      assert.equal(p.positions.at(-1), excerptStart + start)
       assert.equal(p.state[0], true, 'Play remains usable at every stage')
       p.advance(checkpoint - start)
       assert.equal(p.state[0], false)
       await p.render().play()
-      assert.equal(p.positions.at(-1), 0, 'subsequent replay includes every unlocked stage')
+      assert.equal(p.positions.at(-1), excerptStart, 'subsequent replay includes every unlocked stage')
       p.render()
       p.advance(checkpoint)
       assert.equal(p.state[0], false)
@@ -98,6 +99,30 @@ for (const playbackType of ['preview', 'spotify-sdk']) {
     assert.equal(p.state[0], false)
   })
 }
+
+test('Spotify pause/resume stays inside the excerpt and keeps the timer relative', async () => {
+  const p = await player({ playbackType: 'spotify-sdk', trackDurationMs: 180000 })
+  await p.render().play()
+  assert.equal(p.positions.at(-1), 30)
+  p.render()
+  const moving = p.advance(0.25)
+  await moving.play()
+  assert.equal(p.state[1], 0.25)
+  await p.render().play()
+  assert.equal(p.positions.at(-1), 30.25)
+  assert.equal(p.render().timer, '0:00')
+})
+
+test('Spotify excerpt leaves room for the full clip on short recordings', async () => {
+  for (const [trackDurationMs, duration, expected] of [[40000, 15, 25], [20000, 15, 5], [10000, 10, 0], [null, 15, 30]]) {
+    const p = await player({ playbackType: 'spotify-sdk', trackDurationMs, duration })
+    await p.render().play()
+    assert.equal(p.positions.at(-1), expected)
+  }
+  const publicPreview = await player({ trackDurationMs: 180000 })
+  await publicPreview.render().play()
+  assert.equal(publicPreview.positions.at(-1), 0, 'provider previews already start at their excerpt')
+})
 
 test('rapid skips use the latest stage before React renders', async () => {
   const p = await player()

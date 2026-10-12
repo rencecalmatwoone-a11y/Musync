@@ -106,6 +106,7 @@ try {
     const url = new URL(route.request().url())
     if (url.pathname.endsWith('/play')) {
       const body = route.request().postDataJSON()
+      assert.equal(body.position_ms, 30000, 'each new Spotify clip starts inside the recording')
       playbackCalls.push(body.uris[0])
       await page.evaluate(({ id, position }) => {
         const player = window.__sdkPlayer

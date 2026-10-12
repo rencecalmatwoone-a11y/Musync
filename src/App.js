@@ -374,6 +374,7 @@ export default function App() {
                   onRetrySongs=${classicPoolError && !classicTrack ? () => setClassicRetryVersion((value) => value + 1) : null}
                   retrySongsDisabled=${classicPoolLoading || Boolean(classicRetryAt)}
                   duration=${classicDuration}
+                  trackDurationMs=${classicTrack?.durationMs}
                   trackId=${classicTrackId}
                   artistHint=${showHints ? classicTrack?.artist : null}
                   autoplay=${autoplayNext && classicAutoplay}
