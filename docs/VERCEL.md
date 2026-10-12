@@ -103,3 +103,9 @@ If login returns `SERVER_UNAVAILABLE`, check the service role key and session
 migration. If Spotify reports a redirect mismatch, compare the callback URL
 character for character with the Spotify allowlist. Environment changes require
 a new deployment. The browser also needs access to esm.sh and the font CDNs.
+
+For local development with an unavailable Supabase project, set
+`SESSION_STORE_MODE=memory` in `.env` and restart the development server.
+Spotify sessions then stay in the local process and expire on restart.
+This option is ignored on Vercel and when `NODE_ENV=production`; it does not
+restore other Supabase features such as multiplayer or account sign-in.

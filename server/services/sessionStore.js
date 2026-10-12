@@ -4,6 +4,8 @@ const localSessions = new Map()
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000
 
 function storageConfig() {
+  // Explicit local opt-in; deployed servers must retain durable sessions.
+  if (process.env.SESSION_STORE_MODE === 'memory' && !process.env.VERCEL && process.env.NODE_ENV !== 'production') return null
   const url = process.env.SUPABASE_URL
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY
   if (url && key) return { url, key }

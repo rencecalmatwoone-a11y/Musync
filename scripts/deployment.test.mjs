@@ -130,6 +130,37 @@ test('sessions survive a fresh store instance, expire, and can be consumed only 
   assert.equal(await coldStore.get('spotify', 'expired'), null)
 })
 
+test('alternate deployment hosts reach the callback host before setting OAuth state', async () => {
+  const before = rows.size
+  const login = await invoke('/api/spotify/login?tab=untrusted', { host: 'preview.example' })
+  assert.equal(login.status, 302)
+  assert.equal(login.headers.location, 'https://musync.example/api/spotify/login')
+  assert.equal(login.headers['set-cookie'], undefined)
+  assert.equal(rows.size, before)
+})
+
+test('localhost login moves to the loopback callback host before issuing its cookie', async () => {
+  process.env.SPOTIFY_REDIRECT_URI = 'http://127.0.0.1:5173/api/spotify/callback'
+  let localHandler
+  try {
+    localHandler = (await import('../server/index.js?local-oauth-host')).default
+  } finally {
+    delete process.env.SPOTIFY_REDIRECT_URI
+  }
+  const login = await invoke('/api/spotify/login', { host: 'localhost:5173' }, localHandler)
+  assert.equal(login.status, 302)
+  assert.equal(login.headers.location, 'http://127.0.0.1:5173/api/spotify/login')
+  assert.equal(login.headers['set-cookie'], undefined)
+  const canonical = await invoke('/api/spotify/login', { host: '127.0.0.1:5173' }, localHandler)
+  const authorize = new URL(canonical.headers.location)
+  assert.equal(authorize.origin, 'https://accounts.spotify.com')
+  assert.equal(authorize.searchParams.get('redirect_uri'), process.env.SPOTIFY_LOCAL_REDIRECT_URI || 'http://127.0.0.1:5173/api/spotify/callback')
+  const state = authorize.searchParams.get('state')
+  const callback = `/api/spotify/callback?state=${state}&code=test-code`
+  const result = await invoke(callback, { host: '127.0.0.1:5173', cookie: canonical.headers['set-cookie'].split(';')[0] }, localHandler)
+  assert.match(result.headers.location, /spotify=auth&spotify_session=/)
+})
+
 test('OAuth crosses function instances, binds to browser cookie, and rejects replay', async () => {
   const login = await invoke('/api/spotify/login')
   assert.equal(login.status, 302)
@@ -193,5 +224,31 @@ test('session network failures return 503 with safe, actionable server diagnosti
   } finally {
     storageFailure = null
     console.error = originalError
+  }
+})
+
+test('memory mode bypasses unavailable storage only in local development', async () => {
+  const previous = Object.fromEntries(['VERCEL', 'NODE_ENV', 'SESSION_STORE_MODE'].map(key => [key, process.env[key]]))
+  storageFailure = new TypeError('fetch failed')
+  process.env.SESSION_STORE_MODE = 'memory'
+  try {
+    delete process.env.VERCEL
+    process.env.NODE_ENV = 'development'
+    await sessionStore.set('oauth', 'local-memory-state', { valid: true })
+    assert.deepEqual(await sessionStore.take('oauth', 'local-memory-state'), { valid: true })
+    assert.equal(await sessionStore.take('oauth', 'local-memory-state'), null)
+    const login = await invoke('/api/spotify/login')
+    assert.equal(login.status, 302)
+    process.env.VERCEL = '1'
+    await assert.rejects(sessionStore.set('oauth', 'deployed-state', {}), { code: 'SESSION_STORE_UNAVAILABLE' })
+    delete process.env.VERCEL
+    process.env.NODE_ENV = 'production'
+    await assert.rejects(sessionStore.set('oauth', 'production-state', {}), { code: 'SESSION_STORE_UNAVAILABLE' })
+  } finally {
+    storageFailure = null
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
   }
 })

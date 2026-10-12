@@ -60,7 +60,7 @@ const SPOTIFY_CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET || env.SPOTIFY_C
 
 if (!process.env.SPOTIFY_CLIENT_ID) process.env.SPOTIFY_CLIENT_ID = SPOTIFY_CLIENT_ID
 if (!process.env.SPOTIFY_CLIENT_SECRET) process.env.SPOTIFY_CLIENT_SECRET = SPOTIFY_CLIENT_SECRET
-for (const key of ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY']) {
+for (const key of ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'SESSION_STORE_MODE']) {
   if (!process.env[key] && env[key]) process.env[key] = env[key]
 }
 
@@ -177,6 +177,14 @@ async function handleRequest(req, res) {
   if (relative === '/api/spotify/login') {
     if (!spotifyConfigured) {
       sendJson(res, 503, { error: 'SPOTIFY_NOT_CONFIGURED' })
+      return
+    }
+    // Set the OAuth cookie on the callback host, including when login starts
+    // on localhost or an alternate deployment domain.
+    const callbackUrl = new URL(SPOTIFY_REDIRECT_URI)
+    if (url.host !== callbackUrl.host) {
+      res.writeHead(302, { Location: new URL('/api/spotify/login', callbackUrl.origin).href })
+      res.end()
       return
     }
     const state = randomBytes(16).toString('hex')
