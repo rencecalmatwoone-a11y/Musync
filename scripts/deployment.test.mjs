@@ -17,10 +17,12 @@ delete process.env.SPOTIFY_REDIRECT_URI
 
 const nativeFetch = globalThis.fetch
 const rows = new Map()
+let storageFailure = null
 globalThis.fetch = async (input, options = {}) => {
   const url = new URL(input)
   if (url.hostname === '127.0.0.1') return nativeFetch(input, options)
   if (url.hostname === 'database.example') {
+    if (storageFailure) throw storageFailure
     assert.equal(options.headers.apikey, 'private-test-key')
     assert.equal(options.headers.Authorization, 'Bearer private-test-key')
     assert.equal(url.pathname, '/rest/v1/server_sessions')
@@ -168,5 +170,28 @@ test('Vercel fails explicitly if persistent session credentials are missing', as
     assert.equal((await invoke('/api/spotify/status')).status, 200)
   } finally {
     process.env.SUPABASE_SERVICE_ROLE_KEY = key
+  }
+})
+
+test('session network failures return 503 with safe, actionable server diagnostics', async () => {
+  const originalError = console.error
+  const logs = []
+  storageFailure = new TypeError('fetch failed', { cause: Object.assign(new Error('DNS lookup failed'), { code: 'ENOTFOUND' }) })
+  console.error = (...args) => logs.push(args)
+  try {
+    await assert.rejects(sessionStore.get('spotify', 'existing-session'), {
+      code: 'SESSION_STORE_UNAVAILABLE', status: 503,
+    })
+    const response = await invoke('/api/spotify/status?private=secret-query', { 'x-musync-spotify-session': 'existing-session' })
+    assert.equal(response.status, 503)
+    assert.deepEqual(JSON.parse(response.body), { error: 'SERVER_UNAVAILABLE' })
+    assert.deepEqual(logs[0][1], {
+      method: 'GET', path: '/api/spotify/status', code: 'SESSION_STORE_UNAVAILABLE', cause: 'ENOTFOUND',
+    })
+    assert.ok(!JSON.stringify(logs).includes('secret-query'))
+    assert.equal((await invoke('/api/spotify/status')).status, 200)
+  } finally {
+    storageFailure = null
+    console.error = originalError
   }
 })

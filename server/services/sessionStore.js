@@ -20,16 +20,23 @@ function storageId(kind, id) {
 }
 
 async function request(config, query, options = {}) {
-  const response = await fetch(`${config.url.replace(/\/$/, '')}/rest/v1/server_sessions${query}`, {
-    ...options,
-    headers: {
-      apikey: config.key,
-      Authorization: `Bearer ${config.key}`,
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
-    signal: AbortSignal.timeout(10000),
-  })
+  let response
+  try {
+    response = await fetch(`${config.url.replace(/\/$/, '')}/rest/v1/server_sessions${query}`, {
+      ...options,
+      headers: {
+        apikey: config.key,
+        Authorization: `Bearer ${config.key}`,
+        'Content-Type': 'application/json',
+        ...options.headers,
+      },
+      signal: AbortSignal.timeout(10000),
+    })
+  } catch (cause) {
+    throw Object.assign(new Error('Session storage is unreachable. Check the Supabase project URL and network connection.', { cause }), {
+      code: 'SESSION_STORE_UNAVAILABLE', status: 503,
+    })
+  }
   if (!response.ok) {
     throw Object.assign(new Error('Session storage is unavailable. Check credentials and migrations.'), {
       code: 'SESSION_STORE_UNAVAILABLE', status: 503,

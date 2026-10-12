@@ -1789,10 +1789,10 @@ button:focus-visible {
 
 .app-shell.is-multiplayer {
   grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
-  --yellow: #f97316;
-  --yellow-soft: #ea580c;
-  --dc-rgb: 249, 115, 22;
-  --dc-glow: rgba(249, 115, 22, 0.45);
+  --yellow: #22c55e;
+  --yellow-soft: #16a34a;
+  --dc-rgb: 34, 197, 94;
+  --dc-glow: rgba(34, 197, 94, 0.45);
 }
 
 .app-shell.is-multiplayer.is-mp-practice.dc-easy {

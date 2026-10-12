@@ -25,9 +25,11 @@ let clientLoggedOut = false
 function getTabSessionId() {
   try {
     let id = sessionStorage.getItem(TAB_SESSION_KEY)
-    if (!id) {
-      id = crypto.randomUUID()
-      sessionStorage.setItem(TAB_SESSION_KEY, id)
+    // Older clients created UUIDs for guests. OAuth sessions are issued by
+    // the server as 48 hex characters; guest UUIDs have no stored credentials.
+    if (id && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) {
+      sessionStorage.removeItem(TAB_SESSION_KEY)
+      id = null
     }
     const params = new URLSearchParams(window.location.search)
     const returnedSession = params.get('spotify_session')
@@ -39,7 +41,7 @@ function getTabSessionId() {
       window.history.replaceState({}, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`)
       id = returnedSession
     }
-    return id
+    return id || ''
   } catch {
     return ''
   }
@@ -128,6 +130,7 @@ export async function getSpotifyAuthStatus() {
   if (clientLoggedOut) return guestStatus
   const headers = spotifySessionHeaders()
   const session = headers['X-Musync-Spotify-Session'] || ''
+  if (!session && !isSpotifyAuthed) return guestStatus
   const cached = authStatusCache.get(session)
   if (cached && cached.expiresAt > Date.now()) return cached.status
   if (authStatusRequests.has(session)) return authStatusRequests.get(session)

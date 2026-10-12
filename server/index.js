@@ -595,7 +595,12 @@ export default async function handler(req, res) {
     await handleRequest(req, res)
   } catch (error) {
     const status = error instanceof URIError ? 400 : (error?.status === 503 ? 503 : 500)
-    console.error('Request failed:', error?.code || error?.name || 'Error')
+    console.error('Request failed:', {
+      method: req.method || 'GET',
+      path: (req.url || '/').split('?')[0],
+      code: error?.code || error?.name || 'Error',
+      cause: error?.cause?.code || error?.cause?.cause?.code || undefined,
+    })
     if (!res.headersSent) sendJson(res, status, { error: status === 400 ? 'INVALID_REQUEST' : 'SERVER_UNAVAILABLE' })
     else res.end()
   }
