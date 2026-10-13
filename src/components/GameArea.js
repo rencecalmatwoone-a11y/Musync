@@ -166,8 +166,6 @@ export default function GameArea({
   answerLocked = false,
   onPractice = null,
   filtersDisabled = false,
-  onRetrySongs = null,
-  retrySongsDisabled = false,
   statusMessages = [],
 }) {
   const [activeReminder, setActiveReminder] = useState(null)
@@ -231,9 +229,6 @@ export default function GameArea({
         availablePoints=${availablePoints}
         statusMessages=${statusMessages}
       />
-      ${onRetrySongs && html`
-        <button type="button" className="skip-btn" onClick=${onRetrySongs} disabled=${retrySongsDisabled}>Retry songs</button>
-      `}
       <${GuessInput} onSubmit=${onSubmit} feedback=${feedback} disabled=${answerLocked || audioLoading || !trackId} search=${searchClassicCatalog} availablePoints=${availablePoints} />
     </section>
   `

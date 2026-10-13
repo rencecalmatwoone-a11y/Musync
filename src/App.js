@@ -371,8 +371,6 @@ export default function App() {
                   onGenreChange=${setGenre}
                   onMusicOriginChange=${setMusicOrigin}
                   filtersDisabled=${!spotifyAuthed}
-                  onRetrySongs=${classicPoolError && !classicTrack ? () => setClassicRetryVersion((value) => value + 1) : null}
-                  retrySongsDisabled=${classicPoolLoading || Boolean(classicRetryAt)}
                   duration=${classicDuration}
                   trackDurationMs=${classicTrack?.durationMs}
                   trackId=${classicTrackId}

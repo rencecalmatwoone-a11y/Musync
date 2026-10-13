@@ -186,8 +186,8 @@ try {
   // An actual provider failure must remain visible.
   denySearch = true
   await page.getByRole('button', { name: 'Next genre', exact: true }).click()
-  await page.getByRole('button', { name: 'Retry songs', exact: true }).waitFor()
   await page.locator('.audio-status').filter({ hasText: 'Search unavailable' }).waitFor()
+  assert.equal(await page.getByRole('button', { name: 'Retry songs', exact: true }).count(), 0)
   assert.equal(await page.getByRole('button', { name: 'Play clip', exact: true }).isDisabled(), true)
   assert.deepEqual(errors, [])
   console.log(`PASS: real Classic API, initial playback, all seven genres, all eight eras, combined filters, both origins, ${playbackCalls.length} successful SDK starts, and visible provider errors`)

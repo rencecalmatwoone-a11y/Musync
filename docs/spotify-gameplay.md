@@ -28,8 +28,8 @@ the background when three unplayed songs remain. OPM resolves four references
 per page with at most two searches in flight, caches results per session, and
 passes exact cursors through the client and API. Other searches follow Spotify's
 raw result cursor, so filtered empty pages do not end the search. Each foreground
-selection scans at most five pages; an incomplete search reports that more
-results remain, and the visible Retry songs button continues from that cursor.
+selection scans at most five pages; an incomplete search suggests changing
+filters. The search cursor is retained if those filters are selected again.
 Songs can repeat after a matching catalog is exhausted.
 Expired pools are refreshed; they are not cached indefinitely.
 
