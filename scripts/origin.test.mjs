@@ -53,7 +53,7 @@ test('Spotify Classic maps every UI filter value into one combined Spotify query
     ['Pop', 'genre:pop'],
     ['Rock', 'genre:rock'],
     ['Hip-Hop', 'genre:hip-hop'],
-    ['R&B', 'genre:r-n-b'],
+    ['R&B', 'genre:"r&b"'],
     ['Electronic', 'genre:electronic'],
     ['Latin', 'genre:latin'],
     ['Country', 'genre:country'],
@@ -84,7 +84,7 @@ test('supported single artist requests resolve collaborators; transient failures
   assert.equal((await search({ musicOrigin: 'International', offset: 210 }))[0].id, 'recoverable')
 })
 
-test('signed-in Classic uses genre searches without artist lookups and keeps era, origin and playback restrictions', async () => {
+test('signed-in Classic tolerates omitted genre fields and keeps era, origin and playback restrictions', async () => {
   const { sessionStore } = await import('../server/services/sessionStore.js')
   const originalGet = sessionStore.get
   const beforeFetch = globalThis.fetch
@@ -109,7 +109,8 @@ test('signed-in Classic uses genre searches without artist lookups and keeps era
         song('restricted', 'International Artist', { restrictions: { reason: 'market' } }),
       ], next: null } })
     }
-    assert.fail('Classic must not depend on an artist metadata endpoint')
+    assert.ok(url.pathname.startsWith('/v1/artists/'))
+    return Response.json({ id: url.pathname.split('/').at(-1) })
   }
   try {
     const options = { requireUser: true, sessionId: 'empty-genres', musicOrigin: 'International', yearFrom: 2010, yearTo: 2019 }
@@ -121,15 +122,15 @@ test('signed-in Classic uses genre searches without artist lookups and keeps era
       assert.equal(songs[0].playbackType, 'spotify-sdk')
     }
     assert.equal(queries[0], 'year:2010-2019')
-    assert.equal(queries[4], 'genre:r-n-b year:2010-2019')
+    assert.equal(queries[4], 'genre:"r&b" year:2010-2019')
     // No era selection must work too, with no artist metadata available.
     assert.ok((await search({ ...options, yearFrom: undefined, yearTo: undefined })).length > 0)
-    // Unavailable artist metadata must not discard a successful track search.
+    // A failed lookup is not proof that Spotify omitted a deprecated field.
     globalThis.fetch = async (input) => {
       if (new URL(input).pathname === '/v1/search') return Response.json({ tracks: { items: [{ ...track('metadata-error', ['uncached-failure']), album: { release_date: '2014-01-01' } }], next: null } })
       throw new Error('Temporary metadata failure')
     }
-    assert.equal((await search({ ...options, offset: 300 }))[0].id, 'metadata-error')
+    assert.deepEqual(await search({ ...options, offset: 300 }), [])
   } finally {
     sessionStore.get = originalGet
     globalThis.fetch = beforeFetch

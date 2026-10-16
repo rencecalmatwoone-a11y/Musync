@@ -39,6 +39,9 @@ globalThis.fetch = async (input, options) => {
   if (url.pathname === '/v1/me') return Response.json({ id: 'fixture-user', product: 'premium' })
   if (url.pathname.startsWith('/v1/artists/')) {
     artistCalls.push(url.pathname)
+    if (process.env.MUSYNC_SPOTIFY_OMIT_GENRES === '1' && url.pathname.split('/').at(-1).startsWith('artist-')) {
+      return Response.json({ id: url.pathname.split('/').at(-1), name: 'International Artist' })
+    }
     return Response.json({ genres: artistGenres.get(url.pathname.split('/').at(-1)) || [] })
   }
   assert.equal(url.pathname, '/v1/search')
@@ -48,7 +51,7 @@ globalThis.fetch = async (input, options) => {
   const reference = opmReferenceOrder(session).find((song) => query.startsWith(`track:"${song.title}" artist:"${song.artist}"`))
   const id = createHash('sha256').update(query).digest('hex').slice(0, 22)
   const year = reference ? 2024 : Number(query.match(/year:(\d{4})/)?.[1] || 2024)
-  const genre = ({ pop: 'Pop', rock: 'Rock', 'hip-hop': 'Hip-Hop', 'r-n-b': 'R&B', electronic: 'Electronic', latin: 'Latin', country: 'Country' })[query.match(/genre:(\S+)/)?.[1]] || 'Pop'
+  const genre = ({ pop: 'Pop', rock: 'Rock', 'hip-hop': 'Hip-Hop', '"r&b"': 'R&B', electronic: 'Electronic', latin: 'Latin', country: 'Country' })[query.match(/genre:(\S+)/)?.[1]] || 'Pop'
   artistGenres.set('artist-' + id, [genre])
   artistGenres.set('local-new', ['pinoy pop'])
   artistGenres.set('wrong-genre-' + id, [genre === 'Rock' ? 'Country' : 'Rock'])

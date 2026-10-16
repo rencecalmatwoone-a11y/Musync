@@ -350,6 +350,7 @@ button:focus-visible {
 
 .spotify-account {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   width: 100%;
@@ -367,7 +368,7 @@ button:focus-visible {
   align-items: center;
   gap: 9px;
   min-width: 0;
-  flex: 1;
+  flex: 1 0 130px;
 }
 
 .spotify-account__icon {
@@ -3368,6 +3369,8 @@ body:has(.song-reveal-backdrop)::-webkit-scrollbar,
 @media (max-width: 1100px) {
   .app-shell {
     grid-template-columns: 220px minmax(0, 1fr);
+    min-height: 100vh;
+    min-height: 100dvh;
     height: auto;
     overflow: visible;
   }
@@ -4080,10 +4083,6 @@ body:has(.song-reveal-backdrop)::-webkit-scrollbar,
     padding: 8px;
   }
 
-  .spotify-account__copy {
-    display: none;
-  }
-
   .spotify-account__login,
   .spotify-account__logout {
     min-height: 26px;
@@ -4092,7 +4091,7 @@ body:has(.song-reveal-backdrop)::-webkit-scrollbar,
   }
 
   .spotify-account__identity {
-    flex: 0 0 auto;
+    flex: 1 0 130px;
   }
 
   .header {
@@ -4181,10 +4180,8 @@ body:has(.song-reveal-backdrop)::-webkit-scrollbar,
 
   .spotify-account__login,
   .spotify-account__logout {
-    width: 28px;
-    padding-inline: 0;
-    overflow: hidden;
-    font-size: 0;
+    width: auto;
+    font-size: 9px;
     padding-inline: 6px;
     letter-spacing: 0.04em;
   }

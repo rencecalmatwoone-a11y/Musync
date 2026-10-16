@@ -32,7 +32,7 @@ const SPOTIFY_GENRE_VALUES = new Map([
   ['pop', 'pop'],
   ['rock', 'rock'],
   ['hip-hop', 'hip-hop'],
-  ['r&b', 'r-n-b'],
+  ['r&b', '"r&b"'],
   ['electronic', 'electronic'],
   ['latin', 'latin'],
   ['country', 'country'],
@@ -542,7 +542,7 @@ function normalizeTrack(track, genre, difficulty) {
   const album = track.album?.name || ''
   const year = track.album?.release_date ? Number(track.album.release_date.slice(0, 4)) : null
   const genreLabel = genre && genre !== 'Any Genre'
-    ? (track.resolvedGenres || []).find((value) => matchesGenre({ resolvedGenres: [value] }, genre)) || track.resolvedGenre || 'Unknown'
+    ? (track.resolvedGenres || []).find((value) => matchesGenre({ resolvedGenres: [value] }, genre)) || track.searchGenre || track.resolvedGenre || 'Unknown'
     : track.resolvedGenre || 'Unknown'
   return {
     id: track.id,
@@ -550,12 +550,13 @@ function normalizeTrack(track, genre, difficulty) {
     title: track.name,
     artist,
     artistId: track.artists?.[0]?.id || null,
-    musicOrigin: isOpmTrack(track) ? 'OPM' : hasArtistGenres(track) ? 'International' : null,
+    musicOrigin: isOpmTrack(track) ? 'OPM' : hasArtistGenres(track) || track.searchOrigin ? 'International' : null,
     album,
     artwork: track.album?.images?.[0]?.url || null,
     albumArt: track.album?.images?.[0]?.url || null,
     releaseDate: track.album?.release_date || null,
     genre: genreLabel,
+    genreSource: track.searchGenre ? 'spotify-search' : hasArtistGenres(track) ? 'spotify-artist' : null,
     difficulty: Number(difficulty) || 0,
     popularity: typeof track.popularity === 'number' ? track.popularity : null,
     durationMs: track.duration_ms || 30000,
@@ -602,22 +603,31 @@ async function fetchPublicPlaylistPageTracks(id) {
   return tracks
 }
 
+function cachedArtistGenres(id) {
+  const entry = artistGenreCache.get(id)
+  if (entry && entry.expiresAt <= Date.now()) {
+    artistGenreCache.delete(id)
+    return undefined
+  }
+  return entry?.genres
+}
+
 function isOpmTrack(track) {
-  const genres = track.resolvedGenres || (track.artists || []).flatMap((artist) => artistGenreCache.get(artist.id) || [])
+  const genres = track.resolvedGenres || (track.artists || []).flatMap((artist) => cachedArtistGenres(artist.id) || [])
   return (track.artists || []).some((artist) => isKnownOpmArtist(artist.name))
     || genres.some((genre) => /(?:^|[^a-z])(?:opm|pinoy|filipino|philippine|tagalog)(?:[^a-z]|$)/i.test(String(genre)))
 }
 
 function hasArtistGenres(track) {
-  return (track.artists || []).length > 0 && track.artists.every((artist) =>
-    (artistGenreCache.get(artist.id) || []).some((genre) => genre && genre !== 'Unknown'))
+  return (track.artists || []).some((artist) =>
+    (cachedArtistGenres(artist.id) || []).some((genre) => genre && genre !== 'Unknown'))
 }
 
 async function resolveArtistGenres(tracks, credentials, sessionId, requireUser = false) {
   const ids = Array.from(new Set(tracks.flatMap((track) => (track.artists || []).map((artist) => artist.id)).filter(Boolean)))
-  const missing = ids.filter((id) => !artistGenreCache.has(id))
+  const missing = ids.filter((id) => cachedArtistGenres(id) === undefined)
   const resolveArtist = async (id) => {
-    if (artistGenreCache.has(id)) return
+    if (cachedArtistGenres(id) !== undefined) return
     const requestKey = `${sessionId || 'app'}:${requireUser}:${id}`
     let request = artistGenreRequests.get(requestKey)
     if (!request) {
@@ -626,7 +636,12 @@ async function resolveArtistGenres(tracks, credentials, sessionId, requireUser =
           const response = await fetchSpotifyApi(`${API_URL}/artists/${encodeURIComponent(id)}`, credentials, 'artist-genres', sessionId, requireUser)
           if (response.ok) {
             const artist = await response.json()
-            artistGenreCache.set(id, artist.genres?.length ? artist.genres : ['Unknown'])
+            // New Spotify responses can omit this deprecated field entirely.
+            // null means unavailable; [] means explicitly unclassified.
+            artistGenreCache.set(id, {
+              genres: Array.isArray(artist.genres) ? artist.genres : null,
+              expiresAt: Date.now() + AUDIO_CACHE_TTL_MS,
+            })
           } else {
             throw await spotifyApiError(response, 'Spotify origin metadata failed')
           }
@@ -654,11 +669,12 @@ async function resolveArtistGenres(tracks, credentials, sessionId, requireUser =
   if (failure) throw failure
   return tracks.map((track) => ({
     ...track,
-    resolvedGenres: (track.artists || []).flatMap((artist) => artistGenreCache.get(artist.id) || []),
+    genreMetadataUnavailable: (track.artists || []).some((artist) => cachedArtistGenres(artist.id) === null),
+    resolvedGenres: (track.artists || []).flatMap((artist) => cachedArtistGenres(artist.id) || []),
     primaryArtistGenres: track.artists?.[0]?.id
-      ? (artistGenreCache.get(track.artists[0].id) || [])
+      ? (cachedArtistGenres(track.artists[0].id) || [])
       : [],
-    resolvedGenre: (track.artists || []).flatMap((artist) => artistGenreCache.get(artist.id) || []).find(Boolean) || 'Unknown',
+    resolvedGenre: (track.artists || []).flatMap((artist) => cachedArtistGenres(artist.id) || []).find(Boolean) || 'Unknown',
   }))
 }
 
@@ -789,16 +805,23 @@ export async function searchTracks({
       const year = track.album?.release_date ? Number(track.album.release_date.slice(0, 4)) : null
       return !(yFrom !== null && (!Number.isFinite(year) || year < yFrom)) && !(yTo !== null && (!Number.isFinite(year) || year > yTo))
     })
-    // Search results are candidates, not verified genre/origin classifications.
-    // Exclude known local artists before enrichment, then verify metadata using
-    // the shared cache and bounded concurrency. Unknown origin stays excluded.
+    // Retain metadata checks when available. When Spotify omits its deprecated
+    // genres field, use the actual genre-filtered search as genre evidence.
+    // Never use this fallback for a failed request or explicit unknown genres.
     const originCandidates = musicOrigin === 'International'
       ? candidates.filter((track) => !isOpmTrack(track)) : candidates
     const genreResolved = (musicOrigin === 'Any' && (!genre || genre === 'Any Genre')) ? candidates
       : await resolveArtistGenres(originCandidates, { clientId, clientSecret }, sessionId, requireUser)
-    const originTracks = genreResolved.filter((track) => matchesGenre(track, genre)
+    const classified = genreResolved.map((track) => {
+      if (!track.genreMetadataUnavailable || hasArtistGenres(track) || isOpmTrack(track)) return track
+      return { ...track,
+        searchGenre: genreQuery && musicOrigin !== 'OPM' ? genre : null,
+        searchOrigin: musicOrigin === 'International',
+      }
+    })
+    const originTracks = classified.filter((track) => (matchesGenre(track, genre) || track.searchGenre === genre)
       && (musicOrigin === 'Any' || (musicOrigin === 'OPM'
-        ? isOpmTrack(track) : hasArtistGenres(track) && !isOpmTrack(track))))
+        ? isOpmTrack(track) : (hasArtistGenres(track) || track.searchOrigin) && !isOpmTrack(track))))
       .map((track) => normalizeTrack(track, genre, difficulty))
     const resolved = await Promise.all(originTracks.map(withPlayablePreview))
     const tracks = resolved.slice(0, pageLimit)
