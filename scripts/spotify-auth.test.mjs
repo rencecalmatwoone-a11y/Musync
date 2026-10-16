@@ -20,7 +20,7 @@ let denied = false
 let rejectOnce = false
 let alwaysUnauthorized = false
 let grantFailure = false
-const rawTrack = (id) => ({ id, name: `Song ${id}`, artists: [{ id: 'artist', name: 'Artist' }], album: { release_date: '2020-01-01' }, duration_ms: 200000 })
+const rawTrack = (id) => ({ id, name: `Song ${id}`, artists: [{ id: 'artist', name: 'Radiohead' }], album: { release_date: '2020-01-01' }, duration_ms: 200000 })
 globalThis.fetch = async (input, options = {}) => {
   const url = new URL(input)
   calls.push({ path: url.pathname, query: url.searchParams, authorization: options.headers.Authorization, body: options.body })
@@ -140,7 +140,7 @@ test('origin metadata uses bounded concurrency and caches artists across pages',
   let lookups = 0
   globalThis.fetch = async (input) => {
     const url = new URL(input)
-    if (url.pathname === '/v1/search') return Response.json({ tracks: { items: Array.from({ length: 10 }, (_, i) => ({ ...rawTrack(`parallel-${i}`), artists: [{ id: `parallel-artist-${i}`, name: 'Artist' }] })) } })
+    if (url.pathname === '/v1/search') return Response.json({ tracks: { items: Array.from({ length: 10 }, (_, i) => ({ ...rawTrack(`parallel-${i}`), artists: [{ id: `parallel-artist-${i}`, name: 'Radiohead' }] })) } })
     assert.ok(url.pathname.startsWith('/v1/artists/parallel-artist-'))
     lookups++
     peak = Math.max(peak, ++active)
@@ -163,7 +163,7 @@ test('non-Classic OPM and Classic International retain their genre/era filtering
   await seed('filters')
   const previousFetch = globalThis.fetch
   const genres = { local: ['opm', 'pinoy rock'], foreign: ['rock'], wrongGenre: ['opm', 'pop'], unknown: [] }
-  const makeTrack = (id, artist, year = 1995) => ({ ...rawTrack(id), artists: [{ id: `filter-${artist}`, name: artist }], album: { release_date: `${year}-01-01` } })
+  const makeTrack = (id, artist, year = 1995) => ({ ...rawTrack(id), artists: [{ id: `filter-${artist}`, name: artist === 'foreign' ? 'Radiohead' : artist }], album: { release_date: `${year}-01-01` } })
   globalThis.fetch = async (input) => {
     const url = new URL(input)
     if (url.pathname === '/v1/search') {

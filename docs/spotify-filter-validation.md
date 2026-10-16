@@ -12,14 +12,19 @@ artists and failed lookups do not gain this fallback. A classified artist's
 collaboration can survive an unclassified featured artist. Genre metadata expires
 after five minutes so omitted fields are not cached for the process lifetime.
 
-Era and playability checks remain mandatory. Known OPM artists and available OPM
-genre tags are excluded. Spotify supplies no country-of-origin filter: when
-genre metadata is omitted, International relies on known OPM exclusions and
-cannot guarantee exclusion of an unlisted local artist. Era means Spotify's
+Era and playability checks remain mandatory. International requires every
+credited artist to match the positive references in `internationalCatalog.js`,
+derived from the existing International catalogs plus older-era/genre references.
+Known OPM artists and OPM genre tags take precedence. Unknown artists, including
+unknown collaborators and artists with generic pop tags, remain excluded rather
+than being assumed International. This deliberately limits catalog coverage
+until new artists are classified. Era means Spotify's
 album release date, which may differ for reissues.
 
 R&B uses `genre:"r&b"`; the previous `r-n-b` genre-seed spelling produced
 unrelated catalog results. Search is never retried without the selected filters.
+Hip-Hop uses `genre:hiphop`, verified against the live search endpoint; the
+hyphenated genre-seed spelling did not return the expected mainstream catalog.
 
 ## Reproduction and validation
 

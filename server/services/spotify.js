@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer'
 import { randomBytes } from 'node:crypto'
 import { sessionStore } from './sessionStore.js'
 import { isKnownOpmArtist, matchesOpmReference, opmReferenceOrder } from './opmCatalog.js'
+import { hasInternationalArtists } from './internationalCatalog.js'
 
 const ACCOUNTS_URL = 'https://accounts.spotify.com/api/token'
 const API_URL = 'https://api.spotify.com/v1'
@@ -31,7 +32,7 @@ const artistGenreRequests = new Map()
 const SPOTIFY_GENRE_VALUES = new Map([
   ['pop', 'pop'],
   ['rock', 'rock'],
-  ['hip-hop', 'hip-hop'],
+  ['hip-hop', 'hiphop'],
   ['r&b', '"r&b"'],
   ['electronic', 'electronic'],
   ['latin', 'latin'],
@@ -550,7 +551,7 @@ function normalizeTrack(track, genre, difficulty) {
     title: track.name,
     artist,
     artistId: track.artists?.[0]?.id || null,
-    musicOrigin: isOpmTrack(track) ? 'OPM' : hasArtistGenres(track) || track.searchOrigin ? 'International' : null,
+    musicOrigin: isOpmTrack(track) ? 'OPM' : hasInternationalArtists(track) ? 'International' : null,
     album,
     artwork: track.album?.images?.[0]?.url || null,
     albumArt: track.album?.images?.[0]?.url || null,
@@ -816,12 +817,12 @@ export async function searchTracks({
       if (!track.genreMetadataUnavailable || hasArtistGenres(track) || isOpmTrack(track)) return track
       return { ...track,
         searchGenre: genreQuery && musicOrigin !== 'OPM' ? genre : null,
-        searchOrigin: musicOrigin === 'International',
       }
     })
     const originTracks = classified.filter((track) => (matchesGenre(track, genre) || track.searchGenre === genre)
       && (musicOrigin === 'Any' || (musicOrigin === 'OPM'
-        ? isOpmTrack(track) : (hasArtistGenres(track) || track.searchOrigin) && !isOpmTrack(track))))
+        ? isOpmTrack(track) : hasInternationalArtists(track)
+          && (hasArtistGenres(track) || track.genreMetadataUnavailable) && !isOpmTrack(track))))
       .map((track) => normalizeTrack(track, genre, difficulty))
     const resolved = await Promise.all(originTracks.map(withPlayablePreview))
     const tracks = resolved.slice(0, pageLimit)

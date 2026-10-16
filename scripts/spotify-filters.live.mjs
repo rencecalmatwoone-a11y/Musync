@@ -12,8 +12,14 @@ const cases = [
   ...genres.map((genre) => ({ genre, yearFrom: 1990, yearTo: 1999 })),
 ]
 for (const filters of cases) {
-  const page = await searchTracks({ ...filters, clientId: process.env.SPOTIFY_CLIENT_ID,
-    clientSecret: process.env.SPOTIFY_CLIENT_SECRET, musicOrigin: 'International', limit: 3, includePageInfo: true })
+  let page
+  let offset = 0
+  for (let attempt = 0; attempt < 5; attempt++) {
+    page = await searchTracks({ ...filters, clientId: process.env.SPOTIFY_CLIENT_ID,
+      clientSecret: process.env.SPOTIFY_CLIENT_SECRET, musicOrigin: 'International', limit: 10, offset, includePageInfo: true })
+    if (page.tracks.length || page.nextOffset === null) break
+    offset = page.nextOffset
+  }
   assert.ok(page.tracks.length, `Empty results: ${JSON.stringify(filters)}`)
   for (const track of page.tracks) {
     assert.equal(track.provider, 'spotify')

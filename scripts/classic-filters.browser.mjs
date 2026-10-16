@@ -51,13 +51,13 @@ globalThis.fetch = async (input, options) => {
   const reference = opmReferenceOrder(session).find((song) => query.startsWith(`track:"${song.title}" artist:"${song.artist}"`))
   const id = createHash('sha256').update(query).digest('hex').slice(0, 22)
   const year = reference ? 2024 : Number(query.match(/year:(\d{4})/)?.[1] || 2024)
-  const genre = ({ pop: 'Pop', rock: 'Rock', 'hip-hop': 'Hip-Hop', '"r&b"': 'R&B', electronic: 'Electronic', latin: 'Latin', country: 'Country' })[query.match(/genre:(\S+)/)?.[1]] || 'Pop'
+  const genre = ({ pop: 'Pop', rock: 'Rock', hiphop: 'Hip-Hop', '"r&b"': 'R&B', electronic: 'Electronic', latin: 'Latin', country: 'Country' })[query.match(/genre:(\S+)/)?.[1]] || 'Pop'
   artistGenres.set('artist-' + id, [genre])
   artistGenres.set('local-new', ['pinoy pop'])
   artistGenres.set('wrong-genre-' + id, [genre === 'Rock' ? 'Country' : 'Rock'])
   const raw = {
     id, name: reference?.title || `Song ${id}`, uri: `spotify:track:${id}`,
-    artists: [{ id: 'artist-' + id, name: reference?.artist || 'International Artist' }],
+    artists: [{ id: 'artist-' + id, name: reference?.artist || 'Radiohead' }],
     album: { release_date: `${year}-01-01` }, is_playable: true, duration_ms: 180000,
   }
   return Response.json({ tracks: { items: reference ? [raw] : [
@@ -66,6 +66,8 @@ globalThis.fetch = async (input, options) => {
     { ...raw, id: 'opm', artists: [{ id: 'local', name: 'BINI' }] },
     { ...raw, id: 'opm-new', artists: [{ id: 'local-new', name: 'Unlisted Local Artist' }] },
     { ...raw, id: 'unknown', artists: [{ id: 'unknown', name: 'Unclassified Artist' }] },
+    { ...raw, id: 'unlisted-local', artists: [{ id: 'artist-unlisted-local', name: 'Unlisted Filipino Artist' }] },
+    { ...raw, id: 'mixed-unknown', artists: [...raw.artists, { id: 'artist-unlisted-local', name: 'Unlisted Filipino Artist' }] },
     ...(query.includes('genre:') ? [{ ...raw, id: 'wrong-genre', artists: [{ id: 'wrong-genre-' + id, name: 'Wrong Genre Artist' }] }] : []),
   ], next: null } })
 }
@@ -128,7 +130,7 @@ try {
     await page.waitForFunction(() => window.__classicTest?.track && !window.__classicTest.loading && !document.querySelector('.play-btn').disabled)
     const track = await page.evaluate(() => window.__classicTest.track)
     assert.equal(track.provider, 'spotify')
-    assert.ok(!['opm-new', 'unknown', 'wrong-genre', 'blocked', 'opm'].includes(track.id))
+    assert.ok(!['opm-new', 'unknown', 'wrong-genre', 'blocked', 'opm', 'unlisted-local', 'mixed-unknown'].includes(track.id))
     assert.equal(track.playbackType, 'spotify-sdk')
     await page.getByRole('button', { name: 'Play clip', exact: true }).click()
     await page.getByRole('button', { name: 'Pause clip', exact: true }).waitFor()

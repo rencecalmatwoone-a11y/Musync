@@ -20,7 +20,7 @@ for (const [genre, matching, wrong] of cases) {
     const track = (id, genres, extra = {}) => {
       const artistId = `${genre}-${id}`
       metadata.set(artistId, genres)
-      return { id, name: id, artists: [{ id: artistId, name: id }],
+      return { id, name: id, artists: [{ id: artistId, name: 'Radiohead' }],
         album: { release_date: '1995-01-01' }, ...extra }
     }
     const items = [
@@ -86,8 +86,9 @@ for (const genre of ['Any Genre', ...cases.map(([genre]) => genre)]) {
         if (url.pathname !== '/v1/search') return Response.json({ id: url.pathname.split('/').at(-1), name: 'Artist' })
         const q = url.searchParams.get('q')
         if (genre === 'R&B') assert.ok(q.includes('genre:"r&b"'))
+        if (genre === 'Hip-Hop') assert.ok(q.includes('genre:hiphop'))
         if (yearFrom) assert.ok(q.includes(`year:${yearFrom}-${yearTo}`))
-        const raw = { id, name: id, artists: [{ id, name: 'International Artist' }],
+        const raw = { id, name: id, artists: [{ id, name: 'Radiohead' }],
           album: { release_date: `${yearFrom || 2024}-01-01` } }
         return Response.json({ tracks: { items: [raw,
           { ...raw, id: 'local', artists: [{ id: 'bini', name: 'BINI' }] },
@@ -110,7 +111,7 @@ test('an unclassified collaborator does not exclude a classified international a
     const url = new URL(input)
     if (url.pathname === '/v1/search') return Response.json({ tracks: { items: [{
       id: 'collaboration', name: 'Collaboration', artists: [
-        { id: 'classified-lead', name: 'Lead' }, { id: 'unclassified-feature', name: 'Feature' },
+        { id: 'classified-lead', name: 'Radiohead' }, { id: 'unclassified-feature', name: 'Coldplay' },
       ], album: { release_date: '1995' },
     }], next: null } })
     return Response.json({ genres: url.pathname.endsWith('classified-lead') ? ['rock'] : [] })
@@ -127,3 +128,31 @@ test('missing metadata fallback never swallows provider denials', async () => {
   await assert.rejects(searchTracks({ sessionId: 'denied', requireUser: true,
     musicOrigin: 'International', genre: 'Pop' }), { status: 403 })
 })
+
+for (const metadata of [undefined, ['pop']]) {
+  test(`International never absorbs unlisted local artists (${metadata ? 'generic genres' : 'omitted genres'})`, async () => {
+    const suffix = metadata ? 'generic' : 'omitted'
+    const make = (id, names) => ({ id, name: id, album: { release_date: '2024' },
+      artists: names.map((name, index) => ({ id: `${suffix}-${id}-${index}`, name })) })
+    const items = [
+      make('international-only', ['Taylor Swift']),
+      make('known-opm', ['BINI']),
+      make('unlisted-local', ['Unlisted Filipino Artist']),
+      make('english-title-local', ['Unclassified Artist']),
+      make('mixed-unknown', ['Taylor Swift', 'Unlisted Filipino Artist']),
+      make('mixed-known', ['Taylor Swift', 'BINI']),
+      make('international-duet', ['Taylor Swift', 'Ed Sheeran']),
+    ]
+    globalThis.fetch = async (input) => new URL(input).pathname === '/v1/search'
+      ? Response.json({ tracks: { items, next: null } }) : Response.json({ genres: metadata })
+    for (const genre of ['Any Genre', 'Pop']) {
+      const options = { sessionId: `separation-${suffix}`, requireUser: true,
+        musicOrigin: 'International', genre, yearFrom: 2020, yearTo: 2029 }
+      const result = await searchTracks(options)
+      assert.deepEqual(result.map(({ id }) => id), ['international-only', 'international-duet'])
+      assert.deepEqual(await searchTracks(options), result, 'cached pools retain strict origin separation')
+    }
+    const opm = await searchTracks({ sessionId: `separation-${suffix}`, musicOrigin: 'OPM', genre: 'Any Genre' })
+    assert.deepEqual(opm.map(({ id }) => id), ['known-opm', 'mixed-known'])
+  })
+}

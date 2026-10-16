@@ -7,7 +7,7 @@ process.env.SPOTIFY_CLIENT_SECRET = 'origin-test'
 const originalFetch = globalThis.fetch
 after(() => { globalThis.fetch = originalFetch })
 const requests = []
-const artist = (id) => ({ id, name: id })
+const artist = (id) => ({ id, name: ['local', 'unknown'].includes(id) ? id : 'Radiohead' })
 const track = (id, artists) => ({ id, name: id, artists: artists.map(artist), album: { release_date: '2020-01-01' } })
 const mixed = [track('international', ['global']), track('local', ['local']), track('collaboration', ['global', 'local']), track('unknown', ['unknown'])]
 let catalog = mixed
@@ -52,7 +52,7 @@ test('Spotify Classic maps every UI filter value into one combined Spotify query
   const genres = [
     ['Pop', 'genre:pop'],
     ['Rock', 'genre:rock'],
-    ['Hip-Hop', 'genre:hip-hop'],
+    ['Hip-Hop', 'genre:hiphop'],
     ['R&B', 'genre:"r&b"'],
     ['Electronic', 'genre:electronic'],
     ['Latin', 'genre:latin'],
@@ -99,14 +99,14 @@ test('signed-in Classic tolerates omitted genre fields and keeps era, origin and
         ...track(id, [id]), artists: [{ id, name }], album: { release_date: '2014-01-01' }, ...extra,
       })
       return Response.json({ tracks: { items: [
-        song('empty-global', 'International Artist'),
+        song('empty-global', 'Radiohead'),
         song('empty-opm', 'BINI'),
         song('empty-alias', 'Up Dharma Down'),
-        song('empty-collaboration', 'International Artist', { artists: [{ id: 'empty-global', name: 'International Artist' }, { id: 'empty-opm', name: 'BINI' }] }),
-        song('old', 'International Artist', { album: { release_date: '1980-01-01' } }),
-        song('blocked', 'International Artist', { is_playable: false }),
-        song('local-file', 'International Artist', { is_local: true }),
-        song('restricted', 'International Artist', { restrictions: { reason: 'market' } }),
+        song('empty-collaboration', 'Radiohead', { artists: [{ id: 'empty-global', name: 'Radiohead' }, { id: 'empty-opm', name: 'BINI' }] }),
+        song('old', 'Radiohead', { album: { release_date: '1980-01-01' } }),
+        song('blocked', 'Radiohead', { is_playable: false }),
+        song('local-file', 'Radiohead', { is_local: true }),
+        song('restricted', 'Radiohead', { restrictions: { reason: 'market' } }),
       ], next: null } })
     }
     assert.ok(url.pathname.startsWith('/v1/artists/'))
