@@ -251,10 +251,6 @@ button:focus-visible {
   border-right-color: rgba(var(--dc-rgb), 0.2);
 }
 
-.app-shell.is-multiplayer .nav-item {
-  color: var(--yellow);
-}
-
 .app-shell.is-multiplayer .nav-item.is-active {
   background: rgba(var(--dc-rgb), 0.1);
   color: var(--yellow);
