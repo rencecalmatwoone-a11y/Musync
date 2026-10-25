@@ -346,8 +346,8 @@ button:focus-visible {
 
 .spotify-account {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: 10px;
   width: 100%;
   min-width: 0;
@@ -364,7 +364,7 @@ button:focus-visible {
   align-items: center;
   gap: 9px;
   min-width: 0;
-  flex: 1 0 130px;
+  flex: 0 0 auto;
 }
 
 .spotify-account__icon {
@@ -4084,10 +4084,6 @@ body:has(.song-reveal-backdrop)::-webkit-scrollbar,
     min-height: 26px;
     padding: 6px 8px;
     font-size: 9px;
-  }
-
-  .spotify-account__identity {
-    flex: 1 0 130px;
   }
 
   .header {
